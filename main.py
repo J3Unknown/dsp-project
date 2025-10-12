@@ -6,18 +6,61 @@ from tkinter import filedialog, messagebox, ttk
 import os
 import sys
 
+# =============================================================================
+# TESTING FUNCTIONS (Add this section after imports)
+# =============================================================================
+
+def ReadSignalFile(file_name):
+    expected_indices = []
+    expected_samples = []
+    try:
+        with open(file_name, 'r') as f:
+            line = f.readline()
+            line = f.readline()
+            line = f.readline()
+            line = f.readline()
+            while line:
+                L = line.strip()
+                if len(L.split(' ')) == 2:
+                    L = line.split(' ')
+                    V1 = int(L[0])
+                    V2 = float(L[1])
+                    expected_indices.append(V1)
+                    expected_samples.append(V2)
+                    line = f.readline()
+                else:
+                    break
+    except Exception as e:
+        print(f"Error reading test file {file_name}: {e}")
+    return expected_indices, expected_samples
+
+def SignalSamplesAreEqual(TaskName, output_file_name, Your_indices, Your_samples):
+    expected_indices, expected_samples = ReadSignalFile(output_file_name)
+    
+    if len(expected_samples) != len(Your_samples) or len(expected_indices) != len(Your_indices):
+        return f"{TaskName} Test case failed, your signal have different length from the expected one"
+    
+    for i in range(len(Your_indices)):
+        if Your_indices[i] != expected_indices[i]:
+            return f"{TaskName} Test case failed, your signal have different indices from the expected one"
+    
+    for i in range(len(expected_samples)):
+        if abs(Your_samples[i] - expected_samples[i]) >= 0.01:
+            return f"{TaskName} Test case failed, your signal have different values from the expected one"
+    
+    return f"{TaskName} Test case passed successfully"
+
 class SignalVisualizer:
     def __init__(self, root):
         self.root = root
         self.root.title("Signal Visualizer")
-        self.root.geometry("900x700")
+        self.root.geometry("1000x700")
         
         # Handle window closing
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # Variables to store signal data
-        self.signals = []  # List to store multiple signals
-        self.current_signal_index = -1
+        self.signals = []
         
         # Navigation state
         self.pan_start = None
@@ -27,10 +70,10 @@ class SignalVisualizer:
         self.is_panning = False
         
         # Zoom mode
-        self.zoom_mode = "both"  # "both", "x", "y"
+        self.zoom_mode = "both"
         
         # Plot style (continuous vs discrete)
-        self.plot_style = "continuous"  # "continuous" or "discrete"
+        self.plot_style = "continuous"
         
         # Create GUI elements
         self.create_widgets()
@@ -57,18 +100,38 @@ class SignalVisualizer:
         generate_btn.pack(side=tk.LEFT, padx=(0, 10))
         
         # Signal selection
-        self.signal_var = tk.StringVar()
-        self.signal_dropdown = ttk.Combobox(left_controls, textvariable=self.signal_var, state="readonly")
-        self.signal_dropdown.pack(side=tk.LEFT, padx=(0, 10))
-        self.signal_dropdown.bind('<<ComboboxSelected>>', self.on_signal_select)
+        signal_frame = tk.Frame(left_controls)
+        signal_frame.pack(side=tk.LEFT, padx=(0, 10))
+        
+        tk.Label(signal_frame, text="Signals:").pack(anchor="w")
+        self.signal_listbox = tk.Listbox(signal_frame, width=30, height=4, selectmode=tk.MULTIPLE)
+        self.signal_listbox.pack(side=tk.LEFT, fill=tk.Y)
+        
+        # Scrollbar for listbox
+        listbox_scrollbar = tk.Scrollbar(signal_frame, orient=tk.VERTICAL)
+        listbox_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.signal_listbox.config(yscrollcommand=listbox_scrollbar.set)
+        listbox_scrollbar.config(command=self.signal_listbox.yview)
+        
+        # Bind selection event
+        self.signal_listbox.bind('<ButtonRelease-1>', self.on_signal_select)
+        self.signal_listbox.bind('<<ListboxSelected>>', self.on_signal_select)
         
         # Remove signal button
-        remove_btn = tk.Button(left_controls, text="Remove Signal", command=self.remove_signal)
+        remove_btn = tk.Button(left_controls, text="Remove Selected", command=self.remove_signal)
         remove_btn.pack(side=tk.LEFT, padx=(0, 10))
         
         # Clear all button
         clear_btn = tk.Button(left_controls, text="Clear All", command=self.clear_all)
         clear_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Toggle all signals button
+        toggle_btn = tk.Button(left_controls, text="Show All", command=self.toggle_all_signals)
+        toggle_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Refresh plot button
+        refresh_btn = tk.Button(left_controls, text="Refresh Plot", command=self.plot_signal)
+        refresh_btn.pack(side=tk.LEFT, padx=(0, 10))
         
         # Right side controls
         right_controls = tk.Frame(control_frame)
@@ -78,7 +141,7 @@ class SignalVisualizer:
         reset_btn = tk.Button(right_controls, text="Reset View", command=self.reset_view)
         reset_btn.pack(side=tk.LEFT, padx=(0, 10))
         
-        # Normalize button (now opens dialog)
+        # Normalize button
         normalize_btn = tk.Button(right_controls, text="Normalize", command=self.open_normalize_dialog)
         normalize_btn.pack(side=tk.LEFT, padx=(0, 10))
         
@@ -105,7 +168,7 @@ class SignalVisualizer:
         square_btn = tk.Button(op_row1, text="Square Signal", command=self.square_signal)
         square_btn.pack(side=tk.LEFT, padx=(0, 10))
         
-        # Accumulate signal button (now opens dialog)
+        # Accumulate signal button
         accumulate_btn = tk.Button(op_row1, text="Accumulate Signal", command=self.open_accumulate_dialog)
         accumulate_btn.pack(side=tk.LEFT, padx=(0, 10))
         
@@ -120,6 +183,35 @@ class SignalVisualizer:
         # Subtract signals button
         subtract_btn = tk.Button(op_row2, text="Subtract Selected Signals", command=self.open_subtract_dialog)
         subtract_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # =========================================================================
+        # SINGLE COMPARE BUTTON (NEW SECTION)
+        # =========================================================================
+        test_frame = tk.Frame(main_frame)
+        test_frame.pack(fill=tk.X, pady=(10, 5))
+        
+        test_label = tk.Label(test_frame, text="Testing:", font=("Arial", 10, "bold"))
+        test_label.pack(anchor="w")
+        
+        test_buttons_frame = tk.Frame(test_frame)
+        test_buttons_frame.pack(fill=tk.X, pady=5)
+        
+        # Single compare button
+        compare_btn = tk.Button(test_buttons_frame, text="Compare Selected Signals", 
+                               command=self.compare_signals, bg="lightblue", font=("Arial", 10, "bold"))
+        compare_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Test file selection
+        test_file_frame = tk.Frame(test_buttons_frame)
+        test_file_frame.pack(side=tk.LEFT, padx=(20, 0))
+        
+        tk.Label(test_file_frame, text="Test File:").pack(side=tk.LEFT, padx=(0, 5))
+        self.test_file_var = tk.StringVar()
+        test_file_entry = tk.Entry(test_file_frame, textvariable=self.test_file_var, width=30)
+        test_file_entry.pack(side=tk.LEFT, padx=(0, 5))
+        
+        browse_btn = tk.Button(test_file_frame, text="Browse", command=self.browse_test_file)
+        browse_btn.pack(side=tk.LEFT)
         
         # Plot style frame
         style_frame = tk.Frame(main_frame)
@@ -170,33 +262,74 @@ class SignalVisualizer:
         # Initialize plot
         self.setup_plot()
         
-    def setup_plot(self):
-        self.fig, self.ax = plt.subplots(figsize=(10, 6))
-        self.ax.set_title("Signal Visualization")
-        self.ax.set_xlabel("Time / Frequency")
-        self.ax.set_ylabel("Amplitude")
-        self.ax.grid(True)
+    # =========================================================================
+    # SIMPLIFIED TESTING METHOD (NEW)
+    # =========================================================================
+    
+    def browse_test_file(self):
+        """Browse for test case file"""
+        file_path = filedialog.askopenfilename(
+            title="Select Test Case File",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if file_path:
+            self.test_file_var.set(file_path)
+    
+    def compare_signals(self):
+        """Compare selected signal with test case file"""
+        selected_indices = self.signal_listbox.curselection()
         
-        # Embed the plot in Tkinter
-        self.canvas = FigureCanvasTkAgg(self.fig, self.plot_frame)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        if len(selected_indices) != 1:
+            messagebox.showwarning("Compare Signals", "Please select exactly 1 signal to compare with test case")
+            return
         
-        # Connect mouse events for navigation
-        self.canvas.mpl_connect('button_press_event', self.on_press)
-        self.canvas.mpl_connect('button_release_event', self.on_release)
-        self.canvas.mpl_connect('motion_notify_event', self.on_motion)
-        self.canvas.mpl_connect('scroll_event', self.on_scroll)
+        test_file = self.test_file_var.get()
+        if not test_file:
+            messagebox.showwarning("Compare Signals", "Please select a test case file")
+            return
         
+        if not os.path.exists(test_file):
+            messagebox.showerror("Compare Signals", f"Test file not found: {test_file}")
+            return
+        
+        # Get the selected signal
+        signal = self.signals[selected_indices[0]]
+        
+        # Convert to the format needed for testing
+        indices = [int(x) for x in signal['x']]
+        samples = [float(y) for y in signal['y']]
+        
+        # Run the comparison
+        result = SignalSamplesAreEqual("Signal Comparison", test_file, indices, samples)
+        messagebox.showinfo("Comparison Result", result)
+    
+    # [Keep all your existing methods exactly as they were - no changes below this line]
+    # toggle_plot_style, toggle_all_signals, open_normalize_dialog, open_accumulate_dialog, 
+    # on_closing, open_generate_dialog, open_add_dialog, open_subtract_dialog, square_signal,
+    # accumulate_signal, normalize_signal, setup_plot, on_press, on_release, on_motion, 
+    # on_scroll, reset_view, multiply_signal, add_signals, subtract_signals, load_file,
+    # read_signal_file, update_signal_dropdown, on_signal_select, plot_signal, remove_signal, clear_all
+
     def toggle_plot_style(self):
         """Toggle between continuous and discrete plot styles"""
         self.plot_style = self.style_var.get()
-        if self.current_signal_index >= 0:
+        self.plot_signal()
+    
+    def toggle_all_signals(self):
+        """Toggle between showing all signals and selected signals"""
+        if self.signal_listbox.size() > 0:
+            if len(self.signal_listbox.curselection()) == self.signal_listbox.size():
+                # All are selected, so deselect all
+                self.signal_listbox.selection_clear(0, tk.END)
+            else:
+                # Select all signals
+                self.signal_listbox.selection_set(0, tk.END)
             self.plot_signal()
     
     def open_normalize_dialog(self):
         """Open dialog to select normalization type"""
-        if self.current_signal_index < 0 or not self.signals:
-            messagebox.showwarning("Normalize", "No signal selected")
+        if not self.signals:
+            messagebox.showwarning("Normalize", "No signals loaded")
             return
             
         dialog = tk.Toplevel(self.root)
@@ -235,8 +368,8 @@ class SignalVisualizer:
     
     def open_accumulate_dialog(self):
         """Open dialog to input accumulation parameters"""
-        if self.current_signal_index < 0 or not self.signals:
-            messagebox.showwarning("Accumulate", "No signal selected")
+        if not self.signals:
+            messagebox.showwarning("Accumulate", "No signals loaded")
             return
             
         dialog = tk.Toplevel(self.root)
@@ -291,7 +424,7 @@ class SignalVisualizer:
         """Open dialog to generate signals from parameters"""
         dialog = tk.Toplevel(self.root)
         dialog.title("Generate Signal")
-        dialog.geometry("400x400")
+        dialog.geometry("400x280")
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -331,13 +464,6 @@ class SignalVisualizer:
         duration_entry = tk.Entry(dialog, textvariable=duration_var)
         duration_entry.grid(row=5, column=1, sticky="ew", padx=5, pady=5)
         
-        # Smoothness - Default to 10000
-        tk.Label(dialog, text="Smoothness (points):").grid(row=6, column=0, sticky="w", padx=5, pady=5)
-        smooth_var = tk.StringVar(value="10000")
-        smooth_entry = tk.Entry(dialog, textvariable=smooth_var)
-        smooth_entry.grid(row=6, column=1, sticky="ew", padx=5, pady=5)
-        tk.Label(dialog, text="Higher = smoother").grid(row=7, column=1, sticky="w", padx=5)
-        
         # Buttons
         button_frame = tk.Frame(dialog)
         button_frame.grid(row=8, column=0, columnspan=2, pady=10)
@@ -350,55 +476,72 @@ class SignalVisualizer:
                 sampling_freq = float(samp_var.get())
                 phase_shift = float(phase_var.get())
                 duration = float(duration_var.get())
-                smoothness = int(smooth_var.get())
-                
-                # Generate time vector with high resolution for smoothness
-                t = np.linspace(0, duration, smoothness, endpoint=False)
-                
-                # Generate signal based on type
+
+                # --- Validate inputs ---
+                if analog_freq < 0:
+                    messagebox.showerror("Error", "Analog frequency must be non-negative.")
+                    return
+                if sampling_freq <= 0:
+                    messagebox.showerror("Error", "Sampling frequency must be positive.")
+                    return
+                if duration <= 0:
+                    messagebox.showerror("Error", "Duration must be positive.")
+                    return
+
+                # --- Sampling theorem check: warn if fs <= 2*f ---
+                nyquist_rate = 2 * analog_freq
+                if sampling_freq <= nyquist_rate:
+                    if analog_freq == 0:
+                        pass
+                    else:
+                        messagebox.showwarning(
+                            "Sampling Warning",
+                            f"Sampling frequency ({sampling_freq} Hz) is at or below the Nyquist rate ({nyquist_rate} Hz).\n"
+                            "This may cause aliasing, distortion, or (in extreme cases) all-zero samples.\n"
+                            "Consider using a higher sampling frequency (e.g., ≥ {nyquist_rate * 1.2:.1f} Hz)."
+                        )
+
+                # --- Generate time vector ---
+                n_samples = int(sampling_freq * duration)
+                if n_samples <= 0:
+                    n_samples = 1
+                t = np.linspace(0, duration, n_samples, endpoint=False)
+
+                # --- Generate signal based on selected type ---
                 if signal_type == "sin":
                     y = A * np.sin(2 * np.pi * analog_freq * t + phase_shift)
-                    filename = f"Generated {signal_type} (A={A}, f={analog_freq})"
+                    filename = f"Sine (A={A}, f={analog_freq}Hz, φ={phase_shift:.2f})"
                 elif signal_type == "cos":
                     y = A * np.cos(2 * np.pi * analog_freq * t + phase_shift)
-                    filename = f"Generated {signal_type} (A={A}, f={analog_freq})"
+                    filename = f"Cosine (A={A}, f={analog_freq}Hz, φ={phase_shift:.2f})"
                 elif signal_type == "accumulation":
-                    # Generate a simple signal and then accumulate it
-                    # For accumulation, we'll generate a random signal and accumulate it
-                    np.random.seed(42)  # For reproducible results
-                    x = np.random.randn(len(t)) * A  # Random input signal
-                    
-                    # Apply accumulation using the exact equation: y(n) = sum_{k=-∞}^{n} x(k)
-                    # With initial condition y(-1) = 0
-                    y = np.zeros_like(x)
-                    y[0] = x[0]  # y(0) = x(0) when initial condition is 0
-                    for i in range(1, len(x)):
-                        y[i] = y[i-1] + x[i]  # y(n) = y(n-1) + x(n)
-                    
+                    np.random.seed(42)
+                    x = np.random.randn(len(t)) * A
+                    y = np.cumsum(x)  # more efficient and cleaner than loop
                     filename = f"Accumulated signal (A={A})"
                 else:
-                    messagebox.showerror("Error", "Unknown signal type")
+                    messagebox.showerror("Error", "Unknown signal type selected.")
                     return
-                
-                # Create signal data
+
+                # --- Store generated signal ---
                 signal_data = {
-                    'signal_type': 0,  # Time domain
-                    'is_periodic': 0,  # Accumulated signals are not periodic
+                    'signal_type': 0,
+                    'is_periodic': 0 if signal_type == "accumulation" else 1,
                     'x': t,
                     'y': y,
                     'filename': filename
                 }
-                
+
                 self.signals.append(signal_data)
                 self.update_signal_dropdown()
-                self.current_signal_index = len(self.signals) - 1
-                self.signal_var.set(signal_data['filename'])
                 self.plot_signal()
                 dialog.destroy()
-                messagebox.showinfo("Success", "Signal generated successfully")
-                
+                messagebox.showinfo("Success", "Signal generated successfully!")
+
             except ValueError as e:
-                messagebox.showerror("Error", f"Invalid input: {str(e)}")
+                messagebox.showerror("Input Error", "Please ensure all fields contain valid numbers.")
+            except Exception as e:
+                messagebox.showerror("Unexpected Error", f"An error occurred: {str(e)}")
         
         generate_btn = tk.Button(button_frame, text="Generate", command=generate)
         generate_btn.pack(side=tk.LEFT, padx=5)
@@ -415,72 +558,14 @@ class SignalVisualizer:
             messagebox.showwarning("Add Signals", "Need at least 2 signals to add")
             return
             
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Select Signals to Add")
-        dialog.geometry("500x400")
-        dialog.transient(self.root)
-        dialog.grab_set()
+        selected_indices = self.signal_listbox.curselection()
         
-        # Main container
-        main_container = tk.Frame(dialog)
-        main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        if len(selected_indices) < 2:
+            messagebox.showwarning("Add Signals", "Please select at least 2 signals to add")
+            return
         
-        # Title
-        tk.Label(main_container, text="Select signals to add:", font=("Arial", 10, "bold")).pack(anchor="w", pady=(0, 10))
-        
-        # Create scrollable frame for checkboxes
-        canvas = tk.Canvas(main_container, borderwidth=0)
-        scrollbar = tk.Scrollbar(main_container, orient="vertical", command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas)
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        # Create checkboxes for each signal
-        signal_vars = []
-        for i, signal in enumerate(self.signals):
-            var = tk.BooleanVar()
-            cb = tk.Checkbutton(scrollable_frame, text=signal['filename'], variable=var, 
-                               font=("Arial", 9), anchor="w")
-            cb.pack(fill="x", pady=2)
-            signal_vars.append((var, signal))
-        
-        # Pack canvas and scrollbar
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        # Button frame
-        button_frame = tk.Frame(main_container)
-        button_frame.pack(fill="x", pady=(15, 5))
-        
-        def add_selected():
-            selected_signals = [signal for var, signal in signal_vars if var.get()]
-            
-            if len(selected_signals) < 2:
-                messagebox.showwarning("Add Signals", "Please select at least 2 signals")
-                return
-                
-            # Perform the addition with the selected signals
-            self.add_signals(selected_signals)
-            dialog.destroy()
-        
-        # Apply button
-        apply_btn = tk.Button(button_frame, text="Apply Addition", command=add_selected, 
-                             bg="#4CAF50", fg="white", font=("Arial", 10, "bold"),
-                             padx=20, pady=5)
-        apply_btn.pack(side=tk.LEFT, padx=5)
-        
-        cancel_btn = tk.Button(button_frame, text="Cancel", command=dialog.destroy,
-                              padx=20, pady=5)
-        cancel_btn.pack(side=tk.LEFT, padx=5)
-        
-        # Make sure the dialog is properly sized and buttons are visible
-        dialog.update()
+        selected_signals = [self.signals[i] for i in selected_indices]
+        self.add_signals(selected_signals)
         
     def open_subtract_dialog(self):
         """Open dialog to select which signals to subtract"""
@@ -488,151 +573,130 @@ class SignalVisualizer:
             messagebox.showwarning("Subtract Signals", "Need at least 2 signals to subtract")
             return
             
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Select Signals to Subtract")
-        dialog.geometry("500x400")
-        dialog.transient(self.root)
-        dialog.grab_set()
+        selected_indices = self.signal_listbox.curselection()
         
-        # Main container
-        main_container = tk.Frame(dialog)
-        main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        if len(selected_indices) < 2:
+            messagebox.showwarning("Subtract Signals", "Please select at least 2 signals to subtract")
+            return
         
-        # Title
-        tk.Label(main_container, text="Select signals to subtract (first - second - ...):", font=("Arial", 10, "bold")).pack(anchor="w", pady=(0, 10))
-        
-        # Create scrollable frame for checkboxes
-        canvas = tk.Canvas(main_container, borderwidth=0)
-        scrollbar = tk.Scrollbar(main_container, orient="vertical", command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas)
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        # Create checkboxes for each signal
-        signal_vars = []
-        for i, signal in enumerate(self.signals):
-            var = tk.BooleanVar()
-            cb = tk.Checkbutton(scrollable_frame, text=signal['filename'], variable=var, 
-                               font=("Arial", 9), anchor="w")
-            cb.pack(fill="x", pady=2)
-            signal_vars.append((var, signal))
-        
-        # Pack canvas and scrollbar
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        # Button frame
-        button_frame = tk.Frame(main_container)
-        button_frame.pack(fill="x", pady=(15, 5))
-        
-        def subtract_selected():
-            selected_signals = [signal for var, signal in signal_vars if var.get()]
-            
-            if len(selected_signals) < 2:
-                messagebox.showwarning("Subtract Signals", "Please select at least 2 signals")
-                return
-                
-            # Perform the subtraction with the selected signals
-            self.subtract_signals(selected_signals)
-            dialog.destroy()
-        
-        # Apply button
-        apply_btn = tk.Button(button_frame, text="Apply Subtraction", command=subtract_selected, 
-                             bg="#FF9800", fg="white", font=("Arial", 10, "bold"),
-                             padx=20, pady=5)
-        apply_btn.pack(side=tk.LEFT, padx=5)
-        
-        cancel_btn = tk.Button(button_frame, text="Cancel", command=dialog.destroy,
-                              padx=20, pady=5)
-        cancel_btn.pack(side=tk.LEFT, padx=5)
-        
-        # Make sure the dialog is properly sized and buttons are visible
-        dialog.update()
+        selected_signals = [self.signals[i] for i in selected_indices]
+        self.subtract_signals(selected_signals)
         
     def square_signal(self):
-        """Square the currently selected signal (element-wise)"""
-        if self.current_signal_index >= 0 and self.signals:
-            signal = self.signals[self.current_signal_index]
-            signal['y'] = signal['y'] ** 2
-            signal['filename'] = f"Squared {signal['filename']}"
-            self.update_signal_dropdown()
-            self.plot_signal()
-            messagebox.showinfo("Square Signal", "Signal squared successfully")
-        else:
-            messagebox.showwarning("Square Signal", "No signal selected")
+        """Square the selected signals (element-wise)"""
+        selected_indices = self.signal_listbox.curselection()
+        
+        if not selected_indices:
+            messagebox.showwarning("Square Signal", "No signals selected")
+            return
+            
+        for idx in selected_indices:
+            if idx < len(self.signals):
+                signal = self.signals[idx]
+                signal['y'] = signal['y'] ** 2
+                signal['filename'] = f"Squared {signal['filename']}"
+        
+        self.update_signal_dropdown()
+        self.plot_signal()
+        messagebox.showinfo("Square Signal", f"{len(selected_indices)} signals squared successfully")
             
     def accumulate_signal(self, initial_condition=0.0):
         """
-        Apply accumulation to the currently selected signal using the exact equation:
+        Apply accumulation to the selected signals using the exact equation:
         γ(n) = Σ x(k) from k=-∞ to n
         
         Practical implementation: y(n) = y(n-1) + x(n) with y(-1) = initial_condition
         """
-        if self.current_signal_index >= 0 and self.signals:
-            signal = self.signals[self.current_signal_index]
+        selected_indices = self.signal_listbox.curselection()
+        
+        if not selected_indices:
+            messagebox.showwarning("Accumulate Signal", "No signals selected")
+            return
             
-            # Apply accumulation using the exact equation
-            original_y = signal['y'].copy()
-            accumulated_y = np.zeros_like(original_y)
-            
-            # Initialize with initial condition (sum from k=-∞ to -1)
-            if len(original_y) > 0:
-                accumulated_y[0] = initial_condition + original_y[0]
+        accumulated_count = 0
+        
+        for idx in selected_indices:
+            if idx < len(self.signals):
+                signal = self.signals[idx]
                 
-                # Recursive implementation: y(n) = y(n-1) + x(n)
-                for i in range(1, len(original_y)):
-                    accumulated_y[i] = accumulated_y[i-1] + original_y[i]
-            
-            signal['y'] = accumulated_y
-            signal['filename'] = f"Accumulated (IC={initial_condition}) {signal['filename']}"
-            signal['is_periodic'] = 0  # Accumulated signals are not periodic
-            self.update_signal_dropdown()
-            self.plot_signal()
-            
-            # Show detailed information about the operation
-            info_text = f"Applied accumulation: γ(n) = Σ x(k) from k=-∞ to n\n"
-            info_text += f"Initial condition y(-1) = {initial_condition}\n"
-            info_text += f"Final value y({len(original_y)-1}) = {accumulated_y[-1]:.6f}"
-            messagebox.showinfo("Accumulate Signal", info_text)
-        else:
-            messagebox.showwarning("Accumulate Signal", "No signal selected")
+                # Apply accumulation using the exact equation
+                original_y = signal['y'].copy()
+                accumulated_y = np.zeros_like(original_y)
+                
+                # Initialize with initial condition (sum from k=-∞ to -1)
+                if len(original_y) > 0:
+                    accumulated_y[0] = initial_condition + original_y[0]
+                    
+                    # Recursive implementation: y(n) = y(n-1) + x(n)
+                    for i in range(1, len(original_y)):
+                        accumulated_y[i] = accumulated_y[i-1] + original_y[i]
+                
+                signal['y'] = accumulated_y
+                signal['filename'] = f"Accumulated (IC={initial_condition}) {signal['filename']}"
+                signal['is_periodic'] = 0  # Accumulated signals are not periodic
+                accumulated_count += 1
+        
+        self.update_signal_dropdown()
+        self.plot_signal()
+        
+        # Show detailed information about the operation
+        info_text = f"Applied accumulation: γ(n) = Σ x(k) from k=-∞ to n\n"
+        info_text += f"Initial condition y(-1) = {initial_condition}\n"
+        info_text += f"Accumulated {accumulated_count} signals"
+        messagebox.showinfo("Accumulate Signal", info_text)
     
     def normalize_signal(self, norm_type="-1 to 1"):
-        """Normalize the signal using the specified method"""
-        if self.current_signal_index >= 0 and self.signals:
-            signal = self.signals[self.current_signal_index]
+        """Normalize the selected signals using the specified method"""
+        selected_indices = self.signal_listbox.curselection()
+        
+        if not selected_indices:
+            messagebox.showwarning("Normalization", "No signals selected")
+            return
             
-            if norm_type == "-1 to 1":
-                # Amplitude normalization: [-1, 1]
-                max_amp = np.max(np.abs(signal['y']))
-                if max_amp > 0:
-                    signal['y'] = signal['y'] / max_amp
-                    messagebox.showinfo("Normalization", "Signal normalized to range [-1, 1]")
-                else:
-                    messagebox.showwarning("Normalization", "Cannot normalize signal with zero amplitude")
-                    return
-                    
-            elif norm_type == "0 to 1":
-                # Min-Max normalization: [0, 1]
-                min_val = np.min(signal['y'])
-                max_val = np.max(signal['y'])
-                if max_val != min_val:
-                    signal['y'] = (signal['y'] - min_val) / (max_val - min_val)
-                    messagebox.showinfo("Normalization", "Signal normalized to range [0, 1]")
-                else:
-                    messagebox.showwarning("Normalization", "Cannot normalize constant signal")
-                    return
-            
+        normalized_count = 0
+        
+        for idx in selected_indices:
+            if idx < len(self.signals):
+                signal = self.signals[idx]
+                
+                if norm_type == "-1 to 1":
+                    # Amplitude normalization: [-1, 1]
+                    max_amp = np.max(np.abs(signal['y']))
+                    if max_amp > 0:
+                        signal['y'] = signal['y'] / max_amp
+                        normalized_count += 1
+                        
+                elif norm_type == "0 to 1":
+                    # Min-Max normalization: [0, 1]
+                    min_val = np.min(signal['y'])
+                    max_val = np.max(signal['y'])
+                    if max_val != min_val:
+                        signal['y'] = (signal['y'] - min_val) / (max_val - min_val)
+                        normalized_count += 1
+        
+        if normalized_count > 0:
             self.plot_signal()
+            messagebox.showinfo("Normalization", f"{normalized_count} signals normalized to range {norm_type}")
         else:
-            messagebox.showwarning("Normalization", "No signal selected")
+            messagebox.showwarning("Normalization", "No signals could be normalized")
     
+    def setup_plot(self):
+        self.fig, self.ax = plt.subplots(figsize=(10, 6))
+        self.ax.set_title("Signal Visualization")
+        self.ax.set_xlabel("Time / Frequency")
+        self.ax.set_ylabel("Amplitude")
+        self.ax.grid(True)
+        
+        # Embed the plot in Tkinter
+        self.canvas = FigureCanvasTkAgg(self.fig, self.plot_frame)
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # Connect mouse events for navigation
+        self.canvas.mpl_connect('button_press_event', self.on_press)
+        self.canvas.mpl_connect('button_release_event', self.on_release)
+        self.canvas.mpl_connect('motion_notify_event', self.on_motion)
+        self.canvas.mpl_connect('scroll_event', self.on_scroll)
+        
     def on_press(self, event):
         if event.inaxes != self.ax:
             return
@@ -773,16 +837,21 @@ class SignalVisualizer:
         self.canvas.draw()
         
     def reset_view(self):
-        if self.current_signal_index >= 0 and self.signals:
-            signal = self.signals[self.current_signal_index]
+        selected_indices = self.signal_listbox.curselection()
+        
+        if selected_indices:
+            # Get all selected signals
+            all_x = np.concatenate([self.signals[i]['x'] for i in selected_indices])
+            all_y = np.concatenate([self.signals[i]['y'] for i in selected_indices])
             
-            # Reset to original signal bounds with a small margin
-            x_margin = (signal['x'].max() - signal['x'].min()) * 0.05
-            y_margin = (signal['y'].max() - signal['y'].min()) * 0.05
-            
-            self.ax.set_xlim(signal['x'].min() - x_margin, signal['x'].max() + x_margin)
-            self.ax.set_ylim(signal['y'].min() - y_margin, signal['y'].max() + y_margin)
-            self.canvas.draw()
+            if len(all_x) > 0:
+                # Reset to bounds of all selected signals with a small margin
+                x_margin = (all_x.max() - all_x.min()) * 0.05
+                y_margin = (all_y.max() - all_y.min()) * 0.05
+                
+                self.ax.set_xlim(all_x.min() - x_margin, all_x.max() + x_margin)
+                self.ax.set_ylim(all_y.min() - y_margin, all_y.max() + y_margin)
+                self.canvas.draw()
         else:
             # Reset to default view
             self.ax.relim()
@@ -790,124 +859,134 @@ class SignalVisualizer:
             self.canvas.draw()
     
     def multiply_signal(self):
-        if self.current_signal_index >= 0 and self.signals:
-            try:
-                factor = float(self.multiply_var.get())
-                signal = self.signals[self.current_signal_index]
-                signal['y'] = signal['y'] * factor
-                self.plot_signal()
-                messagebox.showinfo("Multiplication", f"Signal multiplied by {factor}")
-            except ValueError:
-                messagebox.showerror("Error", "Invalid multiplication factor")
-        else:
-            messagebox.showwarning("Multiplication", "No signal selected")
+        selected_indices = self.signal_listbox.curselection()
+        
+        if not selected_indices:
+            messagebox.showwarning("Multiplication", "No signals selected")
+            return
+            
+        try:
+            factor = float(self.multiply_var.get())
+            for idx in selected_indices:
+                if idx < len(self.signals):
+                    self.signals[idx]['y'] = self.signals[idx]['y'] * factor
+                    self.signals[idx]['filename'] = f"Multiplied {self.signals[idx]['filename']}"
+            
+            self.update_signal_dropdown()
+            self.plot_signal()
+            messagebox.showinfo("Multiplication", f"{len(selected_indices)} signals multiplied by {factor}")
+        except ValueError:
+            messagebox.showerror("Error", "Invalid multiplication factor")
     
     def add_signals(self, selected_signals=None):
-        """Add multiple signals together"""
+        """Add multiple signals together, keeping all points from all signals"""
         if selected_signals is None:
             if len(self.signals) < 2:
                 messagebox.showwarning("Add Signals", "Need at least 2 signals to add")
                 return
-            selected_signals = self.signals[:2]  # Default to first two
-        
+            selected_signals = self.signals[:2]
+
         if len(selected_signals) < 2:
             messagebox.showwarning("Add Signals", "Need at least 2 signals to add")
             return
-        
-        # Find common x range
-        x_min = max(signal['x'].min() for signal in selected_signals)
-        x_max = min(signal['x'].max() for signal in selected_signals)
-        
-        if x_min >= x_max:
-            messagebox.showerror("Error", "Signals have no overlapping x-range")
-            return
-        
-        # Create a common x axis with the highest resolution
-        min_dx = min(np.min(np.diff(signal['x'])) for signal in selected_signals)
-        x_common = np.arange(x_min, x_max, min_dx)
-        
-        if len(x_common) == 0:
-            messagebox.showerror("Error", "Could not create common x-axis for signals")
-            return
-        
-        # Interpolate all signals to the common x axis and sum them
-        y_sum = np.zeros_like(x_common)
-        signal_names = []
-        
+
+        # Get ALL x values from ALL signals (union of all x values)
+        all_x = set()
         for signal in selected_signals:
-            y_interp = np.interp(x_common, signal['x'], signal['y'])
-            y_sum += y_interp
-            signal_names.append(signal['filename'])
+            all_x.update(signal['x'])
+        
+        # Convert to sorted array
+        x_union = np.sort(np.array(list(all_x)))
+        
+        if len(x_union) == 0:
+            messagebox.showerror("Error", "No x-values found in signals")
+            return
+
+        # Initialize result array
+        y_result = np.zeros_like(x_union)
+        
+        # Add all signals, preserving original values where they exist
+        for signal in selected_signals:
+            # Create a mapping from x values to indices in the union array
+            signal_indices = {}
+            for i, x_val in enumerate(signal['x']):
+                signal_indices[x_val] = i
+            
+            # For each point in the union, add the signal's value if it exists at that x
+            for i, x_val in enumerate(x_union):
+                if x_val in signal_indices:
+                    y_result[i] += signal['y'][signal_indices[x_val]]
+                # If the signal doesn't have this x value, we don't add anything (keeps current value)
         
         # Create a new signal representing the sum
         new_signal = {
-            'signal_type': selected_signals[0]['signal_type'],  # Use first signal's type
+            'signal_type': selected_signals[0]['signal_type'],
             'is_periodic': all(signal['is_periodic'] for signal in selected_signals),
-            'x': x_common,
-            'y': y_sum,
+            'x': x_union,
+            'y': y_result,
             'filename': f"Sum of {len(selected_signals)} signals"
         }
-        
+
         self.signals.append(new_signal)
         self.update_signal_dropdown()
-        self.current_signal_index = len(self.signals) - 1
-        self.signal_var.set(new_signal['filename'])
         self.plot_signal()
         messagebox.showinfo("Add Signals", f"{len(selected_signals)} signals added successfully")
-    
+
     def subtract_signals(self, selected_signals=None):
-        """Subtract multiple signals (first - second - third - ...)"""
+        """Subtract multiple signals (first - second - third - ...), keeping all points from all signals"""
         if selected_signals is None:
             if len(self.signals) < 2:
                 messagebox.showwarning("Subtract Signals", "Need at least 2 signals to subtract")
                 return
-            selected_signals = self.signals[:2]  # Default to first two
-        
+            selected_signals = self.signals[:2]
+
         if len(selected_signals) < 2:
             messagebox.showwarning("Subtract Signals", "Need at least 2 signals to subtract")
             return
+
+        # Get ALL x values from ALL signals (union of all x values)
+        all_x = set()
+        for signal in selected_signals:
+            all_x.update(signal['x'])
         
-        # Find common x range
-        x_min = max(signal['x'].min() for signal in selected_signals)
-        x_max = min(signal['x'].max() for signal in selected_signals)
+        # Convert to sorted array
+        x_union = np.sort(np.array(list(all_x)))
         
-        if x_min >= x_max:
-            messagebox.showerror("Error", "Signals have no overlapping x-range")
+        if len(x_union) == 0:
+            messagebox.showerror("Error", "No x-values found in signals")
             return
+
+        # Initialize result array
+        y_result = np.zeros_like(x_union)
         
-        # Create a common x axis with the highest resolution
-        min_dx = min(np.min(np.diff(signal['x'])) for signal in selected_signals)
-        x_common = np.arange(x_min, x_max, min_dx)
-        
-        if len(x_common) == 0:
-            messagebox.showerror("Error", "Could not create common x-axis for signals")
-            return
-        
-        # Interpolate all signals to the common x axis and subtract them
-        y_result = None
-        signal_names = []
-        
+        # Process each signal
         for i, signal in enumerate(selected_signals):
-            y_interp = np.interp(x_common, signal['x'], signal['y'])
-            if i == 0:
-                y_result = y_interp
-            else:
-                y_result -= y_interp
-            signal_names.append(signal['filename'])
+            # Create a mapping from x values to indices in the signal
+            signal_indices = {}
+            for j, x_val in enumerate(signal['x']):
+                signal_indices[x_val] = j
+            
+            # For each point in the union, add/subtract the signal's value if it exists at that x
+            for k, x_val in enumerate(x_union):
+                if x_val in signal_indices:
+                    signal_value = signal['y'][signal_indices[x_val]]
+                    if i == 0:  # First signal: add its value
+                        y_result[k] += signal_value
+                    else:  # Subsequent signals: subtract their values
+                        y_result[k] -= signal_value
+                # If the signal doesn't have this x value, we treat it as 0 for that signal
         
         # Create a new signal representing the subtraction
         new_signal = {
-            'signal_type': selected_signals[0]['signal_type'],  # Use first signal's type
+            'signal_type': selected_signals[0]['signal_type'],
             'is_periodic': all(signal['is_periodic'] for signal in selected_signals),
-            'x': x_common,
+            'x': x_union,
             'y': y_result,
             'filename': f"Subtraction of {len(selected_signals)} signals"
         }
-        
+
         self.signals.append(new_signal)
         self.update_signal_dropdown()
-        self.current_signal_index = len(self.signals) - 1
-        self.signal_var.set(new_signal['filename'])
         self.plot_signal()
         messagebox.showinfo("Subtract Signals", f"{len(selected_signals)} signals subtracted successfully")
     
@@ -921,16 +1000,14 @@ class SignalVisualizer:
             try:
                 signal_data = self.read_signal_file(file_path)
                 if signal_data:
-                    # Add filename to signal data
                     signal_data['filename'] = os.path.basename(file_path)
                     
-                    # ENHANCED: Make loaded signals smoother by interpolating to higher resolution
-                    if len(signal_data['x']) > 1:  # Only if we have at least 2 points
+                    if len(signal_data['x']) > 1:
                         x_original = signal_data['x']
                         y_original = signal_data['y']
                         
                         # Create new x values with more points (10000 points for smoothness)
-                        num_points = max(10000, len(x_original))  # Use at least 10000 points
+                        num_points = max(10000, len(x_original))
                         x_new = np.linspace(x_original.min(), x_original.max(), num_points)
                         
                         # Interpolate y values
@@ -942,9 +1019,6 @@ class SignalVisualizer:
                     
                     self.signals.append(signal_data)
                     self.update_signal_dropdown()
-                    # Select the newly loaded signal
-                    self.current_signal_index = len(self.signals) - 1
-                    self.signal_var.set(signal_data['filename'])
                     self.plot_signal()
                     messagebox.showinfo("Success", f"Signal loaded and smoothed to {len(signal_data['x'])} points")
             except Exception as e:
@@ -954,13 +1028,11 @@ class SignalVisualizer:
         with open(file_path, 'r') as file:
             lines = file.readlines()
             
-        # Remove empty lines and strip whitespace
         lines = [line.strip() for line in lines if line.strip()]
         
         if len(lines) < 3:
             raise ValueError("File does not contain enough data")
         
-        # Parse header information
         signal_type = int(lines[0])
         is_periodic = int(lines[1])
         num_points = int(lines[2])
@@ -968,7 +1040,6 @@ class SignalVisualizer:
         if len(lines) < 3 + num_points:
             raise ValueError("File does not contain enough data points")
         
-        # Parse data points
         x_values = []
         y_values = []
         
@@ -988,97 +1059,141 @@ class SignalVisualizer:
         }
     
     def update_signal_dropdown(self):
-        filenames = [signal['filename'] for signal in self.signals]
-        self.signal_dropdown['values'] = filenames
+        """Update the listbox with current signals"""
+        self.signal_listbox.delete(0, tk.END)
+        for signal in self.signals:
+            self.signal_listbox.insert(tk.END, signal['filename'])
         
-        if self.signals:
-            self.signal_dropdown.configure(state="readonly")
-            if self.current_signal_index < 0:
-                self.current_signal_index = 0
-                self.signal_var.set(filenames[0])
-        else:
-            self.signal_dropdown.configure(state="disabled")
-            self.signal_var.set("")
+        # Auto-select the first signal if none selected and we have signals
+        if self.signals and len(self.signal_listbox.curselection()) == 0:
+            self.signal_listbox.selection_set(0)
+            # Force plot update after selection
+            self.root.after(100, self.plot_signal)
     
     def on_signal_select(self, event=None):
-        selected_file = self.signal_var.get()
-        for i, signal in enumerate(self.signals):
-            if signal['filename'] == selected_file:
-                self.current_signal_index = i
-                self.plot_signal()
-                break
+        """Handle signal selection changes"""
+        # Force a small delay to ensure selection is processed
+        self.root.after(10, self.plot_signal)
     
     def plot_signal(self):
-        if self.current_signal_index < 0 or not self.signals:
-            return
-            
-        signal = self.signals[self.current_signal_index]
-        
+        """Plot all selected signals with different colors"""
         # Clear the plot
         self.ax.clear()
         
-        # Plot the signal based on the selected style
-        if self.plot_style == "continuous":
-            # Continuous plot (line)
-            self.ax.plot(signal['x'], signal['y'], 'b-', linewidth=1.5)
-        else:
-            # Discrete plot (stem)
-            markerline, stemlines, baseline = self.ax.stem(signal['x'], signal['y'], basefmt=" ")
-            plt.setp(stemlines, 'linewidth', 1.5)
-            plt.setp(markerline, 'markersize', 3)
+        selected_indices = self.signal_listbox.curselection()
         
-        # Set labels based on signal type
-        if signal['signal_type'] == 0:  # Time domain
-            self.ax.set_xlabel("Time")
-            self.ax.set_title(f"Time Domain Signal - {signal['filename']}")
-        else:  # Frequency domain
-            self.ax.set_xlabel("Frequency")
-            self.ax.set_title(f"Frequency Domain Signal - {signal['filename']}")
+        if not selected_indices and self.signals:
+            # If no signals selected but we have signals, show empty plot with message
+            self.ax.set_title("Select signals to display")
+            self.ax.set_xlabel("Time / Frequency")
+            self.ax.set_ylabel("Amplitude")
+            self.ax.grid(True)
+            self.canvas.draw()
+            self.info_label.config(text="No signals selected - please select signals from the list")
+            return
+        elif not selected_indices:
+            # No signals at all
+            self.ax.set_title("Signal Visualization")
+            self.ax.set_xlabel("Time / Frequency")
+            self.ax.set_ylabel("Amplitude")
+            self.ax.grid(True)
+            self.canvas.draw()
+            self.info_label.config(text="No signal loaded")
+            return
+        
+        # Define a color cycle for signals
+        colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+        
+        legend_handles = []
+        legend_labels = []
+        
+        all_domains = set()
+        all_periodic = set()
+        total_points = 0
+        
+        for i, signal_idx in enumerate(selected_indices):
+            if signal_idx < len(self.signals):
+                signal = self.signals[signal_idx]
+                color = colors[i % len(colors)]
+                
+                # Plot the signal based on the selected style
+                if self.plot_style == "continuous":
+                    # Continuous plot (line)
+                    line, = self.ax.plot(signal['x'], signal['y'], color=color, linewidth=1.5, 
+                                       label=signal['filename'])
+                else:
+                    # Discrete plot (stem)
+                    markerline, stemlines, baseline = self.ax.stem(signal['x'], signal['y'], 
+                                                                 basefmt=" ", 
+                                                                 label=signal['filename'])
+                    plt.setp(stemlines, 'linewidth', 1.5, 'color', color)
+                    plt.setp(markerline, 'markersize', 3, 'color', color)
+                    line = markerline  # Use markerline for legend
+                
+                legend_handles.append(line)
+                legend_labels.append(signal['filename'])
+                
+                # Collect information
+                domain = "Time" if signal['signal_type'] == 0 else "Frequency"
+                periodic = "Periodic" if signal['is_periodic'] == 1 else "Non-periodic"
+                all_domains.add(domain)
+                all_periodic.add(periodic)
+                total_points += len(signal['x'])
+        
+        # Set labels based on signal types
+        if len(all_domains) == 1:
+            domain_label = list(all_domains)[0]
+        else:
+            domain_label = "Mixed Domains"
             
+        self.ax.set_xlabel("Time" if "Time" in all_domains else "Frequency")
+        self.ax.set_title(f"Signal Visualization - {len(selected_indices)} Signals")
         self.ax.set_ylabel("Amplitude")
         self.ax.grid(True)
         
-        # Set initial view with margins
-        if len(signal['x']) > 0:
-            x_margin = (signal['x'].max() - signal['x'].min()) * 0.05
-            y_margin = (signal['y'].max() - signal['y'].min()) * 0.05
+        # Add legend
+        if legend_handles:
+            self.ax.legend(legend_handles, legend_labels, loc='upper right', fontsize=8)
+        
+        # Set view to encompass all selected signals
+        if selected_indices:
+            all_x = np.concatenate([self.signals[i]['x'] for i in selected_indices])
+            all_y = np.concatenate([self.signals[i]['y'] for i in selected_indices])
             
-            self.ax.set_xlim(signal['x'].min() - x_margin, signal['x'].max() + x_margin)
-            self.ax.set_ylim(signal['y'].min() - y_margin, signal['y'].max() + y_margin)
+            if len(all_x) > 0:
+                x_margin = (all_x.max() - all_x.min()) * 0.05
+                y_margin = (all_y.max() - all_y.min()) * 0.05
+                
+                self.ax.set_xlim(all_x.min() - x_margin, all_x.max() + x_margin)
+                self.ax.set_ylim(all_y.min() - y_margin, all_y.max() + y_margin)
         
         # Update information label
-        domain = "Time" if signal['signal_type'] == 0 else "Frequency"
-        periodic = "Periodic" if signal['is_periodic'] == 1 else "Non-periodic"
+        periodic_text = "Mixed" if len(all_periodic) > 1 else list(all_periodic)[0]
         style = "Continuous" if self.plot_style == "continuous" else "Discrete"
-        info_text = f"File: {signal['filename']} | Domain: {domain} | {periodic} | Style: {style} | Points: {len(signal['x'])}"
+        info_text = f"Signals: {len(selected_indices)} | Domain: {domain_label} | {periodic_text} | Style: {style} | Total Points: {total_points}"
         self.info_label.config(text=info_text)
         
         # Refresh the canvas
         self.canvas.draw()
     
     def remove_signal(self):
-        if self.current_signal_index >= 0 and self.signals:
-            removed_signal = self.signals.pop(self.current_signal_index)
-            self.update_signal_dropdown()
-            
-            if self.signals:
-                self.current_signal_index = min(self.current_signal_index, len(self.signals) - 1)
-                self.signal_var.set(self.signals[self.current_signal_index]['filename'])
-                self.plot_signal()
-            else:
-                self.current_signal_index = -1
-                self.signal_var.set("")
-                self.ax.clear()
-                self.ax.set_title("Signal Visualization")
-                self.ax.set_xlabel("Time / Frequency")
-                self.ax.set_ylabel("Amplitude")
-                self.ax.grid(True)
-                self.canvas.draw()
-                self.info_label.config(text="No signal loaded")
+        """Remove selected signals"""
+        selected_indices = self.signal_listbox.curselection()
+        
+        if not selected_indices:
+            messagebox.showwarning("Remove Signal", "No signals selected")
+            return
+        
+        # Remove signals in reverse order to maintain correct indices
+        for idx in sorted(selected_indices, reverse=True):
+            if idx < len(self.signals):
+                self.signals.pop(idx)
+        
+        self.update_signal_dropdown()
+        self.plot_signal()
     
     def clear_all(self):
         self.signals = []
-        self.current_signal_index = -1
         self.update_signal_dropdown()
         self.ax.clear()
         self.ax.set_title("Signal Visualization")
