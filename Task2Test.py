@@ -21,7 +21,10 @@ def SinCosSignalSamplesAreEqual(user_choice, file_name, indices, samples):
     expected_indices = []
     expected_samples = []
     with open(file_name, 'r') as f:
-        line = f.readlines()
+        line = f.readline()
+        line = f.readline()
+        line = f.readline()
+        line = f.readline()
         while line:
             L = line.strip()
             if len(L.split(' ')) == 2:
@@ -98,7 +101,10 @@ def SignalSamplesAreEqual(TaskName, output_file_name, Your_indices, Your_samples
     expected_indices = []
     expected_samples = []
     with open(output_file_name, 'r') as f:
-        line = f.readlines()
+        line = f.readline()
+        line = f.readline()
+        line = f.readline()
+        line = f.readline()
         while line:
             L = line.strip()
             if len(L.split(' ')) == 2:

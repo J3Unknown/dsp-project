@@ -68,6 +68,9 @@ def SignalSamplesAreEqual(TaskName, output_file_name, Your_indices, Your_samples
     expected_samples = []
     with open(output_file_name, 'r') as f:
         line = f.readline()
+        line = f.readline()
+        line = f.readline()
+        line = f.readline()
         while line:
             L = line.strip()
             if len(L.split(' ')) == 2:

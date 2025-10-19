@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import os
 import sys
+import math
 import Task1Test as task1
 import Task2Test as task2
 
@@ -17,7 +18,7 @@ class SignalVisualizer:
         # Handle window closing
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
-        # Variables to store signal data - FIXED: Use list but with better structure
+        # Variables to store signal data
         self.signals = []  # List of signal dictionaries
         
         # Navigation state
@@ -103,6 +104,14 @@ class SignalVisualizer:
         normalize_btn = tk.Button(right_controls, text="Normalize", command=self.open_normalize_dialog)
         normalize_btn.pack(side=tk.LEFT, padx=(0, 10))
         
+        # Quantize button
+        quantize_btn = tk.Button(right_controls, text="Quantize Signal", command=self.open_quantize_dialog)
+        quantize_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Quick Quantize button
+        quick_quantize_btn = tk.Button(right_controls, text="Quick Quantize", command=self.quick_quantize, bg="#4CAF50", fg="white")
+        quick_quantize_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
         # Operation frame
         operation_frame = tk.Frame(main_frame)
         operation_frame.pack(fill=tk.X, pady=(0, 10))
@@ -142,14 +151,12 @@ class SignalVisualizer:
         subtract_btn = tk.Button(op_row2, text="Subtract Selected Signals", command=self.open_subtract_dialog)
         subtract_btn.pack(side=tk.LEFT, padx=(0, 10))
         
+        # Test frame
         test_frame = tk.Frame(main_frame)
         test_frame.pack(fill=tk.X, pady=(10, 5))
         
         test_label = tk.Label(test_frame, text="Testing:", font=("Arial", 10, "bold"))
         test_label.pack(anchor="w")
-        
-        test_buttons_frame = tk.Frame(test_frame)
-        test_buttons_frame.pack(fill=tk.X, pady=5)
         
         run_tests_btn = tk.Button(main_frame, text="Open Test Window", bg="#337ab7", fg="white",
                           font=("Arial", 10, "bold"), command=self.open_test_window)
@@ -204,18 +211,411 @@ class SignalVisualizer:
         # Initialize plot
         self.setup_plot()
 
+    def quick_quantize(self):
+        """Perform quick quantization with default parameters on selected signal"""
+        if not self.signals:
+            messagebox.showwarning("Warning", "No signals loaded!")
+            return
+        
+        selected_indices = self.signal_listbox.curselection()
+        if not selected_indices:
+            messagebox.showwarning("Warning", "Please select a signal!")
+            return
+        
+        # Use default parameters
+        signal = self.signals[selected_indices[0]]
+        method = "bits"
+        value = 3  # Default: 3 bits
+        
+        try:
+            # Perform quantization
+            result_indices, result_quantized, result_encoded, result_error = self.quantize_signal(
+                signal["y"], method, value
+            )
+            
+            # Add quantized signal to the plot
+            quantized_signal = {
+                'signal_type': signal['signal_type'],
+                'is_periodic': signal['is_periodic'],
+                'x': signal['x'],
+                'y': result_quantized,
+                'filename': f"Quantized {signal['filename']} ({method}={value})"
+            }
+            self.signals.append(quantized_signal)
+            self.update_signal_dropdown()
+            self.plot_signal()
+            
+            # Show brief results
+            messagebox.showinfo("Quick Quantization", 
+                              f"Signal quantized successfully!\n"
+                              f"Method: {method}, Value: {value}\n"
+                              f"Original signal: {signal['filename']}\n"
+                              f"Added quantized signal to plot")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred during quantization: {str(e)}")
+
+    # Quantization test method
+    def QuantizeSignalSamplesAreEqual(self, file_name, Your_indices, Your_samples, Your_quantized, Your_encoded, Your_error):
+        try:
+            expected_indices = []
+            expected_quantized = []
+            expected_encoded = []
+            expected_error = []
+            
+            with open(file_name, 'r') as f:
+                # Skip header
+                line = f.readline()  # signal_type
+                line = f.readline()  # is_periodic
+                line = f.readline()  # num_samples
+                
+                while line:
+                    line = f.readline().strip()
+                    if not line:
+                        break
+                    
+                    # Parse the quantized data line
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        expected_indices.append(int(parts[0]))
+                        expected_encoded.append(parts[1])
+                        expected_quantized.append(float(parts[2]))
+                        expected_error.append(float(parts[3]))
+            
+            if len(expected_quantized) != len(Your_quantized):
+                return False, f"Quantization Test case failed, your quantized signal has different length from the expected one"
+            
+            for i in range(len(expected_quantized)):
+                if abs(Your_quantized[i] - expected_quantized[i]) >= 0.01:
+                    return False, f"Quantization Test case failed, your quantized signal has different values from the expected one"
+                
+                if abs(Your_error[i] - expected_error[i]) >= 0.01:
+                    return False, f"Quantization Test case failed, your quantization error has different values from the expected one"
+            
+            return True, "Quantization Test case passed successfully"
+            
+        except Exception as e:
+            return False, f"Quantization Test case failed: {str(e)}"
+
+    def open_quantize_dialog(self):
+        """Open dialog to select quantization parameters"""
+        if not self.signals:
+            messagebox.showwarning("Warning", "No signals loaded!")
+            return
+        
+        selected_indices = self.signal_listbox.curselection()
+        if not selected_indices:
+            messagebox.showwarning("Warning", "Please select a signal!")
+            return
+        
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Quantize Signal")
+        dialog.geometry("500x550")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Store quantization results for the dialog
+        dialog.quantization_results = None
+        
+        # Signal info
+        signal = self.signals[selected_indices[0]]
+        tk.Label(dialog, text=f"Quantizing: {signal['filename']}", font=("Arial", 10, "bold")).pack(pady=10)
+        tk.Label(dialog, text=f"Signal length: {len(signal['y'])} samples").pack(pady=5)
+        
+        # Quick Start button
+        quick_start_frame = tk.Frame(dialog)
+        quick_start_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        quick_start_btn = tk.Button(quick_start_frame, text="Start Quantization", command=lambda: perform_quantization(True),
+                                   bg="#4CAF50", fg="white", font=("Arial", 9, "bold"))
+        quick_start_btn.pack(fill=tk.X, pady=5)
+        
+        # Parameters frame
+        params_frame = tk.Frame(dialog)
+        params_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        tk.Label(params_frame, text="Quantization Parameters:", font=("Arial", 9, "bold")).pack(anchor="w")
+        
+        # Method selection
+        method_frame = tk.Frame(params_frame)
+        method_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(method_frame, text="Method:").pack(side=tk.LEFT)
+        method_var = tk.StringVar(value="bits")
+        bits_radio = tk.Radiobutton(method_frame, text="Bits", variable=method_var, value="bits")
+        bits_radio.pack(side=tk.LEFT, padx=10)
+        levels_radio = tk.Radiobutton(method_frame, text="Levels", variable=method_var, value="levels")
+        levels_radio.pack(side=tk.LEFT, padx=10)
+        
+        # Value input
+        value_frame = tk.Frame(params_frame)
+        value_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(value_frame, text="Value:").pack(side=tk.LEFT)
+        value_var = tk.StringVar(value="3")
+        value_entry = tk.Entry(value_frame, textvariable=value_var, width=10)
+        value_entry.pack(side=tk.LEFT, padx=5)
+        
+        # Output selection frame
+        output_frame = tk.Frame(dialog)
+        output_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        tk.Label(output_frame, text="Select Outputs to Display:", font=("Arial", 9, "bold")).pack(anchor="w")
+        
+        # Create checkboxes for output selection
+        checkbox_frame = tk.Frame(output_frame)
+        checkbox_frame.pack(fill=tk.X, pady=5)
+        
+        # Four checkboxes for the outputs
+        interval_index_var = tk.BooleanVar(value=False)
+        encoded_var = tk.BooleanVar(value=True)
+        quantized_var = tk.BooleanVar(value=True)
+        error_var = tk.BooleanVar(value=False)
+        
+        interval_cb = tk.Checkbutton(checkbox_frame, text="Interval Index", variable=interval_index_var)
+        interval_cb.pack(anchor="w", pady=2)
+        
+        encoded_cb = tk.Checkbutton(checkbox_frame, text="Encoded", variable=encoded_var)
+        encoded_cb.pack(anchor="w", pady=2)
+        
+        quantized_cb = tk.Checkbutton(checkbox_frame, text="Quantized", variable=quantized_var)
+        quantized_cb.pack(anchor="w", pady=2)
+        
+        error_cb = tk.Checkbutton(checkbox_frame, text="Error", variable=error_var)
+        error_cb.pack(anchor="w", pady=2)
+        
+        # Output options frame
+        options_frame = tk.Frame(dialog)
+        options_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        tk.Label(options_frame, text="Additional Options:", font=("Arial", 9, "bold")).pack(anchor="w")
+        
+        show_results_var = tk.BooleanVar(value=True)
+        show_results_cb = tk.Checkbutton(options_frame, text="Show quantization results in console", 
+                                        variable=show_results_var)
+        show_results_cb.pack(anchor="w", pady=2)
+        
+        add_quantized_var = tk.BooleanVar(value=True)
+        add_quantized_cb = tk.Checkbutton(options_frame, text="Add quantized signal to plot", 
+                                         variable=add_quantized_var)
+        add_quantized_cb.pack(anchor="w", pady=2)
+        
+        # Status label to show quantization status
+        status_frame = tk.Frame(dialog)
+        status_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        status_var = tk.StringVar(value="Ready to quantize")
+        status_label = tk.Label(status_frame, textvariable=status_var, font=("Arial", 9), fg="blue")
+        status_label.pack(anchor="w")
+        
+        # Buttons frame
+        button_frame = tk.Frame(dialog)
+        button_frame.pack(pady=20)
+        
+        def perform_quantization(quick_start=False):
+            """Perform quantization without closing the dialog"""
+            try:
+                method = method_var.get()
+                value = int(value_var.get())
+                
+                if value <= 0:
+                    raise ValueError("Value must be positive")
+                
+                # Get output selections
+                show_interval = interval_index_var.get()
+                show_encoded = encoded_var.get()
+                show_quantized = quantized_var.get()
+                show_error = error_var.get()
+                
+                # At least one output must be selected
+                if not any([show_interval, show_encoded, show_quantized, show_error]):
+                    messagebox.showerror("Error", "Please select at least one output to display")
+                    return
+                
+                # Update status
+                status_var.set("Quantizing...")
+                dialog.update()
+                
+                # Perform quantization
+                result_indices, result_quantized, result_encoded, result_error = self.quantize_signal(
+                    signal["y"], method, value
+                )
+                
+                # Store results for later use
+                dialog.quantization_results = (result_indices, result_quantized, result_encoded, result_error)
+                
+                # Show results if requested
+                if show_results_var.get():
+                    self.show_quantization_results(
+                        result_indices, result_quantized, result_encoded, result_error,
+                        show_interval, show_encoded, show_quantized, show_error
+                    )
+                
+                # Update status
+                status_var.set(f"Quantization complete! Method: {method}, Value: {value}")
+                
+                # Enable the Apply button since we have results
+                apply_btn.config(state=tk.NORMAL)
+                
+                # If quick start, automatically apply and close
+                if quick_start:
+                    apply_quantization()
+                
+            except (ValueError, TypeError) as e:
+                messagebox.showerror("Error", f"Invalid value: {str(e)}")
+                status_var.set("Error in quantization")
+            except Exception as e:
+                messagebox.showerror("Error", f"An error occurred: {str(e)}")
+                status_var.set("Error in quantization")
+        
+        def apply_quantization():
+            """Apply the quantization results and close the dialog"""
+            if dialog.quantization_results is None:
+                messagebox.showwarning("Warning", "Please perform quantization first!")
+                return
+            
+            try:
+                # Add quantized signal if requested
+                if add_quantized_var.get():
+                    result_indices, result_quantized, result_encoded, result_error = dialog.quantization_results
+                    method = method_var.get()
+                    value = int(value_var.get())
+                    
+                    quantized_signal = {
+                        'signal_type': signal['signal_type'],
+                        'is_periodic': signal['is_periodic'],
+                        'x': signal['x'],
+                        'y': result_quantized,
+                        'filename': f"Quantized {signal['filename']} ({method}={value})"
+                    }
+                    self.signals.append(quantized_signal)
+                    self.update_signal_dropdown()
+                    self.plot_signal()
+                
+                dialog.destroy()
+                messagebox.showinfo("Success", f"Signal quantized successfully!\nMethod: {method_var.get()}, Value: {value_var.get()}")
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"An error occurred while applying: {str(e)}")
+        
+        # Create buttons
+        perform_btn = tk.Button(button_frame, text="Perform Quantization", command=lambda: perform_quantization(False), bg="#4CAF50", fg="white")
+        perform_btn.pack(side=tk.LEFT, padx=5)
+        
+        apply_btn = tk.Button(button_frame, text="Apply", command=apply_quantization, bg="#2196F3", fg="white")
+        apply_btn.pack(side=tk.LEFT, padx=5)
+        apply_btn.config(state=tk.DISABLED)  # Initially disabled until quantization is performed
+        
+        cancel_btn = tk.Button(button_frame, text="Cancel", command=dialog.destroy)
+        cancel_btn.pack(side=tk.LEFT, padx=5)
+    
+    def show_quantization_results(self, indices, quantized, encoded, error, 
+                                 show_interval, show_encoded, show_quantized, show_error):
+        """Display quantization results in console or message box based on selected outputs"""
+        results_text = f"=== QUANTIZATION RESULTS ===\n"
+        results_text += f"Number of samples: {len(indices)}\n\n"
+        
+        # Build header based on selected outputs
+        headers = ["Index"]
+        if show_interval:
+            headers.append("Interval")
+        if show_encoded:
+            headers.append("Encoded")
+        if show_quantized:
+            headers.append("Quantized")
+        if show_error:
+            headers.append("Error")
+        
+        # Create header line
+        header_line = "\t".join(headers)
+        results_text += header_line + "\n"
+        
+        # Create separator line
+        separator = "-----\t" * len(headers)
+        results_text += separator + "\n"
+        
+        # Add data rows
+        for i in range(min(20, len(indices))):  # Show first 20 samples
+            row_data = [str(indices[i])]
+            
+            if show_interval:
+                # Interval index is the same as the quantization level, which we can get from encoded
+                # The encoded binary represents the interval index
+                interval_index = int(encoded[i], 2) if encoded[i] else 0
+                row_data.append(str(interval_index))
+            
+            if show_encoded:
+                row_data.append(encoded[i])
+            
+            if show_quantized:
+                row_data.append(f"{quantized[i]:.4f}")
+            
+            if show_error:
+                row_data.append(f"{error[i]:.4f}")
+            
+            results_text += "\t".join(row_data) + "\n"
+        
+        if len(indices) > 20:
+            results_text += "...\t" * len(headers) + "\n"
+            results_text += f"(Showing first 20 of {len(indices)} samples)\n"
+        
+        # Print to console
+        print(results_text)
+        
+        # Also show in message box for quick viewing
+        messagebox.showinfo("Quantization Results", results_text)
+    
+    def quantize_signal(self, samples, method, value):
+        """Quantize the signal samples"""
+        # Calculate number of levels
+        if method == 'bits':
+            levels = 2 ** value
+            bits = value
+        else:
+            levels = value
+            bits = math.ceil(math.log2(levels))
+        
+        # Find min and max of signal
+        min_val = min(samples)
+        max_val = max(samples)
+        
+        # Calculate step size
+        step = (max_val - min_val) / levels
+        
+        # Quantize each sample
+        quantized_samples = []
+        encoded_samples = []
+        error_samples = []
+        
+        for sample in samples:
+            # Find the quantization level
+            level = int((sample - min_val) / step)
+            if level == levels:  # Handle the edge case
+                level = levels - 1
+            
+            # Calculate quantized value (midpoint of the quantization interval)
+            quantized_val = min_val + (level + 0.5) * step
+            
+            # Encode the level in binary
+            binary_code = format(level, f'0{bits}b')
+            
+            # Calculate quantization error
+            error = quantized_val - sample
+            
+            quantized_samples.append(quantized_val)
+            encoded_samples.append(binary_code)
+            error_samples.append(error)
+        
+        return list(range(len(samples))), quantized_samples, encoded_samples, error_samples
+
     def open_test_window(self):
         test_window = tk.Toplevel(self.root)
         test_window.title("Signal Testing")
-        test_window.geometry("500x500")
+        test_window.geometry("500x600")
         test_window.resizable(True, True)
 
         # --- Title ---
         tk.Label(test_window, text="Run Signal Tests", font=("Arial", 12, "bold")).pack(pady=10)
-
-        # --- Select Expected File ---
-        file_frame = tk.Frame(test_window)
-        file_frame.pack(pady=10, fill=tk.X, padx=15)
 
         # --- Select Existing Signal ---
         signal_frame = tk.Frame(test_window)
@@ -250,9 +650,8 @@ class SignalVisualizer:
         # Test execution function
         def run_test(test_func, test_name, requires_file=True):
             if requires_file:
-                file_path = self.test_file_var.get().strip()
+                file_path = filedialog.askopenfilename(title=f"Select expected file for {test_name}")
                 if not file_path:
-                    messagebox.showwarning("Missing File", f"Please select an expected signal file for {test_name}.")
                     return
             
             sig_name = self.selected_signal_var.get()
@@ -268,16 +667,19 @@ class SignalVisualizer:
                     return
 
                 # Get user signal data
-                your_indices = selected_signal['x']
+                your_indices = list(range(len(selected_signal['y'])))
                 your_samples = selected_signal['y']
                 
                 # Run the test
                 if requires_file:
-                    result = test_func(file_path, your_indices, your_samples)
+                    success, message = test_func(file_path, your_indices, your_samples)
                 else:
-                    result = test_func(None, your_indices, your_samples)
+                    success, message = test_func(your_indices, your_samples)
                 
-                messagebox.showinfo("Success", f"{test_name} completed successfully!")
+                if success:
+                    messagebox.showinfo("Success", f"✅ {test_name}: {message}")
+                else:
+                    messagebox.showerror("Test Failed", f"❌ {test_name}: {message}")
                 
             except Exception as e:
                 messagebox.showerror("Test Error", f"Error running {test_name}:\n{str(e)}")
@@ -346,6 +748,67 @@ class SignalVisualizer:
                 "Accumulation Test", requires_file=True
             )).pack(side=tk.LEFT, padx=5, pady=3)
 
+        # --- Quantization Test ---
+        quant_test_frame = tk.Frame(buttons_frame)
+        quant_test_frame.pack(fill=tk.X, pady=5)
+
+        tk.Label(quant_test_frame, text="Quantization Test:", font=("Arial", 10, "bold")).pack(anchor="w")
+
+        quant_test_buttons = tk.Frame(quant_test_frame)
+        quant_test_buttons.pack(fill=tk.X, padx=10, pady=5)
+
+        def run_quantization_test():
+            sig_name = self.selected_signal_var.get()
+            if sig_name == "No signals loaded":
+                messagebox.showwarning("Warning", "Please select a signal!")
+                return
+
+            # Find the selected signal
+            selected_signal = next((sig for sig in self.signals if sig['filename'] == sig_name), None)
+            if selected_signal is None:
+                messagebox.showwarning("Warning", "Selected signal not found!")
+                return
+
+            # Ask for quantization method
+            method = tk.simpledialog.askstring("Quantization Test", "Enter 'levels' or 'bits':")
+            if not method:
+                return
+            
+            if method not in ['levels', 'bits']:
+                messagebox.showerror("Error", "Invalid method! Use 'levels' or 'bits'")
+                return
+            
+            # Ask for value
+            try:
+                value = int(tk.simpledialog.askstring("Quantization Test", f"Enter number of {method}:"))
+                if value <= 0:
+                    raise ValueError("Value must be positive")
+            except (ValueError, TypeError):
+                messagebox.showerror("Error", "Invalid value! Please enter a positive integer")
+                return
+            
+            # Perform quantization
+            result_indices, result_quantized, result_encoded, result_error = self.quantize_signal(
+                selected_signal["y"], method, value
+            )
+            
+            # Test the result
+            file_name = filedialog.askopenfilename(title="Select expected output for quantization test")
+            if not file_name:
+                return
+            
+            success, message = self.QuantizeSignalSamplesAreEqual(
+                file_name, result_indices, selected_signal["y"], result_quantized, result_encoded, result_error
+            )
+            
+            if success:
+                messagebox.showinfo("Success", "✅ " + message)
+            else:
+                messagebox.showerror("Error", "❌ " + message)
+
+        tk.Button(quant_test_buttons, text="Test Quantization", width=20,
+                 command=run_quantization_test).pack(side=tk.LEFT, padx=5, pady=3)
+
         # --- Status Label ---
         status_frame = tk.Frame(test_window)
         status_frame.pack(fill=tk.X, padx=15, pady=10)
@@ -354,7 +817,6 @@ class SignalVisualizer:
         status_label = tk.Label(status_frame, textvariable=self.test_status_var, 
                             font=("Arial", 9), fg="blue")
         status_label.pack(anchor="w")
-
 
     def toggle_plot_style(self):
         """Toggle between continuous and discrete plot styles"""
@@ -990,10 +1452,9 @@ class SignalVisualizer:
             messagebox.showwarning("Subtract Signals", "Need at least 2 signals to subtract")
             return
 
-        # Get ALL x values from ALL signals (union of all x values)
         all_x = set()
         for signal in selected_signals:
-            all_x.update(signal['x'])
+            all_x.update(signal['x']) # all X values in all signals
         
         # Convert to sorted array
         x_union = np.sort(np.array(list(all_x)))
@@ -1002,10 +1463,8 @@ class SignalVisualizer:
             messagebox.showerror("Error", "No x-values found in signals")
             return
 
-        # Initialize result array
         y_result = np.zeros_like(x_union)
         
-        # Process each signal
         for i, signal in enumerate(selected_signals):
             # Create a mapping from x values to indices in the signal
             signal_indices = {}
@@ -1020,9 +1479,8 @@ class SignalVisualizer:
                         y_result[k] += signal_value
                     else:  # Subsequent signals: subtract their values
                         y_result[k] -= signal_value
-                # If the signal doesn't have this x value, we treat it as 0 for that signal
         
-        # Create a new signal representing the subtraction
+
         new_signal = {
             'signal_type': selected_signals[0]['signal_type'],
             'is_periodic': all(signal['is_periodic'] for signal in selected_signals),
@@ -1048,25 +1506,11 @@ class SignalVisualizer:
                 if signal_data:
                     signal_data['filename'] = os.path.basename(file_path)
                     
-                    if len(signal_data['x']) > 1:
-                        x_original = signal_data['x']
-                        y_original = signal_data['y']
-                        
-                        # Create new x values with more points (10000 points for smoothness)
-                        num_points = max(10000, len(x_original))
-                        x_new = np.linspace(x_original.min(), x_original.max(), num_points)
-                        
-                        # Interpolate y values
-                        y_new = np.interp(x_new, x_original, y_original)
-                        
-                        # Replace with smoother signal
-                        signal_data['x'] = x_new
-                        signal_data['y'] = y_new
-                    
+                    # Use original sample size from file (no smoothing)
                     self.signals.append(signal_data)
                     self.update_signal_dropdown()
                     self.plot_signal()
-                    messagebox.showinfo("Success", f"Signal loaded and smoothed to {len(signal_data['x'])} points")
+                    messagebox.showinfo("Success", f"Signal loaded successfully! ({len(signal_data['x'])} points)")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load file: {str(e)}")
     
@@ -1164,20 +1608,25 @@ class SignalVisualizer:
                 
                 # Plot the signal based on the selected style
                 if self.plot_style == "continuous":
-                    # Continuous plot (line)
+                    # Continuous plot (line) - Use original x values
                     line, = self.ax.plot(signal['x'], signal['y'], color=color, linewidth=1.5, 
                                        label=signal['filename'])
                 else:
-                    # Discrete plot (stem)
+                    # Discrete plot (stem) - Use original x values for discrete plotting
                     markerline, stemlines, baseline = self.ax.stem(signal['x'], signal['y'], 
                                                                  basefmt=" ", 
-                                                                 label=signal['filename'])
+                                                                 label=f"{signal['filename']} ({len(signal['y'])} points)")
                     plt.setp(stemlines, 'linewidth', 1.5, 'color', color)
                     plt.setp(markerline, 'markersize', 3, 'color', color)
                     line = markerline  # Use markerline for legend
                 
                 legend_handles.append(line)
-                legend_labels.append(signal['filename'])
+                
+                # For both modes, show number of points in legend for discrete mode
+                if self.plot_style == "discrete":
+                    legend_labels.append(f"{signal['filename']} ({len(signal['y'])} points)")
+                else:
+                    legend_labels.append(signal['filename'])
                 
                 # Collect information
                 domain = "Time" if signal['signal_type'] == 0 else "Frequency"
@@ -1216,7 +1665,20 @@ class SignalVisualizer:
         # Update information label
         periodic_text = "Mixed" if len(all_periodic) > 1 else list(all_periodic)[0]
         style = "Continuous" if self.plot_style == "continuous" else "Discrete"
-        info_text = f"Signals: {len(selected_indices)} | Domain: {domain_label} | {periodic_text} | Style: {style} | Total Points: {total_points}"
+        
+        # Show number of points per signal in both modes, but format differently
+        if self.plot_style == "discrete":
+            signal_info = []
+            for i, signal_idx in enumerate(selected_indices):
+                if signal_idx < len(self.signals):
+                    signal = self.signals[signal_idx]
+                    signal_info.append(f"{signal['filename']}: {len(signal['y'])} points")
+            info_text = f"Signals: {len(selected_indices)} | Domain: {domain_label} | {periodic_text} | Style: {style}"
+            if signal_info:
+                info_text += f" | Points: {', '.join(signal_info)}"
+        else:
+            info_text = f"Signals: {len(selected_indices)} | Domain: {domain_label} | {periodic_text} | Style: {style} | Total Points: {total_points}"
+        
         self.info_label.config(text=info_text)
         
         # Refresh the canvas
