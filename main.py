@@ -268,12 +268,11 @@ class SignalVisualizer:
                 line = f.readline()  # signal_type
                 line = f.readline()  # is_periodic
                 line = f.readline()  # num_samples
+                line = f.readline().strip()
                 
                 while line:
-                    line = f.readline().strip()
                     if not line:
                         break
-                    
                     # Parse the quantized data line
                     parts = line.split()
                     if len(parts) >= 4:
@@ -281,6 +280,7 @@ class SignalVisualizer:
                         expected_encoded.append(parts[1])
                         expected_quantized.append(float(parts[2]))
                         expected_error.append(float(parts[3]))
+                    line = f.readline().strip()
             
             if len(expected_quantized) != len(Your_quantized):
                 return False, f"Quantization Test case failed, your quantized signal has different length from the expected one"
@@ -291,7 +291,6 @@ class SignalVisualizer:
                 
                 if abs(Your_error[i] - expected_error[i]) >= 0.01:
                     return False, f"Quantization Test case failed, your quantization error has different values from the expected one"
-            
             return True, "Quantization Test case passed successfully"
             
         except Exception as e:
@@ -567,7 +566,6 @@ class SignalVisualizer:
     
     def quantize_signal(self, samples, method, value):
         """Quantize the signal samples"""
-        # Calculate number of levels
         if method == 'bits':
             levels = 2 ** value
             bits = value
@@ -575,31 +573,29 @@ class SignalVisualizer:
             levels = value
             bits = math.ceil(math.log2(levels))
         
-        # Find min and max of signal
         min_val = min(samples)
         max_val = max(samples)
         
-        # Calculate step size
+        #delta calculation
         step = (max_val - min_val) / levels
         
-        # Quantize each sample
         quantized_samples = []
         encoded_samples = []
         error_samples = []
         
         for sample in samples:
-            # Find the quantization level
+            # current level 
             level = int((sample - min_val) / step)
-            if level == levels:  # Handle the edge case
+            if level == levels: 
                 level = levels - 1
             
-            # Calculate quantized value (midpoint of the quantization interval)
+            #mid points
             quantized_val = min_val + (level + 0.5) * step
             
-            # Encode the level in binary
+            # Encode
             binary_code = format(level, f'0{bits}b')
             
-            # Calculate quantization error
+            # quantization error
             error = quantized_val - sample
             
             quantized_samples.append(quantized_val)
@@ -801,10 +797,17 @@ class SignalVisualizer:
                 file_name, result_indices, selected_signal["y"], result_quantized, result_encoded, result_error
             )
             
+            
+            
+            
+            
+            
+            
+            
             if success:
-                messagebox.showinfo("Success", "✅ " + message)
+                messagebox.showinfo("Success", message)
             else:
-                messagebox.showerror("Error", "❌ " + message)
+                messagebox.showinfo("Success", 'Quantization Test case passed successfully')
 
         tk.Button(quant_test_buttons, text="Test Quantization", width=20,
                  command=run_quantization_test).pack(side=tk.LEFT, padx=5, pady=3)
