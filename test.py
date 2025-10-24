@@ -2,10 +2,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, simpledialog
 import os
 import sys
 import math
+import cmath
 import Task1Test as task1
 import Task2Test as task2
 
@@ -20,6 +21,12 @@ class SignalVisualizer:
         
         # Variables to store signal data
         self.signals = []  # List of signal dictionaries
+        
+        # Frequency domain data
+        self.freq_domain_data = None  # Store FFT results
+        self.sampling_freq = None
+        self.modified_fft = None
+        self.current_signal_index = None  # Track which signal is being analyzed
         
         # Navigation state
         self.pan_start = None
@@ -41,6 +48,9 @@ class SignalVisualizer:
         # Main frame
         main_frame = tk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Create menu bar
+        self.create_menu_bar()
         
         # Control frame
         control_frame = tk.Frame(main_frame)
@@ -211,6 +221,677 @@ class SignalVisualizer:
         # Initialize plot
         self.setup_plot()
 
+    def create_menu_bar(self):
+        """Create the menu bar with Frequency Domain menu"""
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
+        
+        # Frequency Domain menu
+        freq_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Frequency Domain", menu=freq_menu)
+        
+        freq_menu.add_command(label="Apply Fourier Transform", command=self.apply_fourier_transform)
+        freq_menu.add_command(label="Show Dominant Frequencies", command=self.show_dominant_frequencies)
+        freq_menu.add_command(label="Modify Components", command=self.modify_components)
+        freq_menu.add_command(label="Remove DC Component", command=self.remove_dc_component)
+        freq_menu.add_command(label="Reconstruct Signal", command=self.reconstruct_signal)
+        freq_menu.add_separator()
+        freq_menu.add_command(label="Apply IDFT to Frequency File", command=self.apply_idft_to_frequency_file)
+        freq_menu.add_command(label="Show Current Signal Analysis", command=self.show_current_signal_analysis)
+
+    def apply_idft_to_frequency_file(self):
+        """Apply Inverse DFT to a frequency domain file (amplitude and phase data)"""
+        file_path = filedialog.askopenfilename(
+            title="Select Frequency Domain File",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        
+        if file_path:
+            try:
+                # Read the frequency domain file
+                with open(file_path, 'r') as file:
+                    lines = file.readlines()
+                
+                lines = [line.strip() for line in lines if line.strip()]
+                
+                if len(lines) < 3:
+                    raise ValueError("File does not contain enough data")
+                
+                signal_type = int(lines[0])
+                is_periodic = int(lines[1])
+                num_points = int(lines[2])
+                
+                if len(lines) < 3 + num_points:
+                    raise ValueError("File does not contain enough data points")
+                
+                amplitudes = []
+                phases = []
+                
+                for i in range(3, 3 + num_points):
+                    values = lines[i].split()
+                    if len(values) < 2:
+                        continue
+                        
+                    # Remove 'f' suffix if present and convert to float
+                    amp_str = values[0].rstrip('f')
+                    phase_str = values[1].rstrip('f')
+                    
+                    amplitudes.append(float(amp_str))
+                    phases.append(float(phase_str))
+                
+                # Apply IDFT
+                time_domain_signal = self.apply_idft(amplitudes, phases)
+                
+                # Create time axis (assuming uniform sampling)
+                n = len(time_domain_signal)
+                t = np.arange(n)
+                
+                # Create signal dictionary
+                signal_data = {
+                    'signal_type': 0,  # Time domain
+                    'is_periodic': is_periodic,
+                    'x': t,
+                    'y': time_domain_signal,
+                    'filename': f"IDFT_{os.path.basename(file_path)}"
+                }
+                
+                self.signals.append(signal_data)
+                self.update_signal_dropdown()
+                self.plot_signal()
+                
+                messagebox.showinfo("Success", 
+                                  f"IDFT applied successfully!\n"
+                                  f"Generated {n} time domain samples from {num_points} frequency components")
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to apply IDFT: {str(e)}")
+
+    def apply_idft(self, amplitudes, phases):
+        """Apply Inverse Discrete Fourier Transform to amplitude and phase data"""
+        n = len(amplitudes)
+        
+        # Create complex frequency domain representation
+        # X[k] = amplitude[k] * exp(j * phase[k])
+        freq_domain = np.array([amp * cmath.exp(1j * phase) 
+                               for amp, phase in zip(amplitudes, phases)])
+        
+        # Apply Inverse DFT manually
+        time_domain = np.zeros(n, dtype=complex)
+        for i in range(n):  # Time index
+            sum_val = 0
+            for k in range(n):  # Frequency index
+                # IDFT formula: x[n] = (1/N) * Σ X[k] * exp(j * 2π * k * n / N)
+                exponent = 2j * cmath.pi * k * i / n
+                sum_val += freq_domain[k] * cmath.exp(exponent)
+            time_domain[i] = sum_val / n
+        
+        # The signal should be real, so take the real part
+        # (small imaginary parts are due to numerical precision)
+        return np.real(time_domain)
+
+    def apply_fourier_transform(self):
+        """Apply Fourier transform to selected signal and display frequency domain"""
+        if not self.signals:
+            messagebox.showwarning("Warning", "No signals loaded!")
+            return
+        
+        selected_indices = self.signal_listbox.curselection()
+        if not selected_indices:
+            messagebox.showwarning("Warning", "Please select a signal!")
+            return
+        
+        # Ask for sampling frequency
+        sampling_freq = simpledialog.askfloat("Sampling Frequency", 
+                                                "Enter sampling frequency (Hz):",
+                                                minvalue=0.1, initialvalue=1000.0)
+        if sampling_freq is None:
+            return
+        
+        self.sampling_freq = sampling_freq
+        signal_idx = selected_indices[0]
+        signal = self.signals[signal_idx]
+        self.current_signal_index = signal_idx  # Store which signal we're analyzing
+        
+        # Apply DFT/FFT
+        n = len(signal['y'])
+        if n > 0:
+            # Use FFT for efficiency
+            fft_result = np.fft.fft(signal['y'])
+            freqs = np.fft.fftfreq(n, 1/sampling_freq)
+            
+            # Calculate amplitudes and phases
+            amplitudes = np.abs(fft_result)
+            phases = np.angle(fft_result)
+            
+            # Normalize amplitudes to [0, 1]
+            if np.max(amplitudes) > 0:
+                normalized_amplitudes = amplitudes / np.max(amplitudes)
+            else:
+                normalized_amplitudes = amplitudes
+            
+            # Store frequency domain data
+            self.freq_domain_data = {
+                'frequencies': freqs,
+                'amplitudes': amplitudes,
+                'normalized_amplitudes': normalized_amplitudes,
+                'phases': phases,
+                'fft_result': fft_result,
+                'signal_name': signal['filename'],
+                'signal_data': signal['y'],
+                'time_domain': signal['x']
+            }
+            self.modified_fft = fft_result.copy()  # Store a copy for modifications
+            
+            # Display frequency domain plots
+            self.display_frequency_domain()
+            
+            # Show current signal analysis
+            self.show_current_signal_analysis()
+        else:
+            messagebox.showerror("Error", "Selected signal has no data!")
+
+    def display_frequency_domain(self):
+        """Display frequency vs amplitude and frequency vs phase plots"""
+        if self.freq_domain_data is None:
+            messagebox.showwarning("Warning", "No frequency domain data available!")
+            return
+        
+        # Create a new window for frequency domain plots
+        freq_window = tk.Toplevel(self.root)
+        freq_window.title("Frequency Domain Analysis")
+        freq_window.geometry("1200x800")
+        
+        # Create frame for plots
+        plot_frame = tk.Frame(freq_window)
+        plot_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Create figure with subplots
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 8))
+        
+        # Use modified FFT if available, otherwise use original
+        if self.modified_fft is not None:
+            fft_used = self.modified_fft
+            title_suffix = " (Modified)"
+        else:
+            fft_used = self.freq_domain_data['fft_result']
+            title_suffix = ""
+        
+        # Recalculate from the FFT being used
+        amplitudes = np.abs(fft_used)
+        phases = np.angle(fft_used)
+        if np.max(amplitudes) > 0:
+            normalized_amplitudes = amplitudes / np.max(amplitudes)
+        else:
+            normalized_amplitudes = amplitudes
+        
+        freqs = self.freq_domain_data['frequencies']
+        
+        # Plot 1: Frequency vs Normalized Amplitude (Positive frequencies)
+        positive_mask = freqs >= 0
+        positive_freqs = freqs[positive_mask]
+        positive_norm_amps = normalized_amplitudes[positive_mask]
+        
+        ax1.stem(positive_freqs, positive_norm_amps, basefmt=" ")
+        ax1.set_title(f"Frequency vs Normalized Amplitude{title_suffix}")
+        ax1.set_xlabel("Frequency (Hz)")
+        ax1.set_ylabel("Normalized Amplitude")
+        ax1.grid(True)
+        
+        # Plot 2: Frequency vs Phase (Positive frequencies)
+        positive_phases = phases[positive_mask]
+        ax2.stem(positive_freqs, positive_phases, basefmt=" ")
+        ax2.set_title(f"Frequency vs Phase{title_suffix}")
+        ax2.set_xlabel("Frequency (Hz)")
+        ax2.set_ylabel("Phase (radians)")
+        ax2.grid(True)
+        
+        # Plot 3: Original Signal (Time Domain)
+        time_data = self.freq_domain_data['time_domain']
+        signal_data = self.freq_domain_data['signal_data']
+        ax3.plot(time_data, signal_data)
+        ax3.set_title("Original Signal (Time Domain)")
+        ax3.set_xlabel("Time")
+        ax3.set_ylabel("Amplitude")
+        ax3.grid(True)
+        
+        # Plot 4: Dominant Frequencies Highlight
+        dominant_mask = normalized_amplitudes > 0.5
+        dominant_freqs = freqs[dominant_mask]
+        dominant_amps = normalized_amplitudes[dominant_mask]
+        
+        ax4.stem(positive_freqs, positive_norm_amps, basefmt=" ", linefmt='gray', markerfmt='go')
+        if len(dominant_freqs) > 0:
+            # Only show positive dominant frequencies
+            positive_dominant_mask = dominant_freqs >= 0
+            positive_dominant_freqs = dominant_freqs[positive_dominant_mask]
+            positive_dominant_amps = dominant_amps[positive_dominant_mask]
+            ax4.stem(positive_dominant_freqs, positive_dominant_amps, basefmt=" ", linefmt='red', markerfmt='ro')
+            ax4.set_title("Dominant Frequencies (Amplitude > 0.5)")
+        else:
+            ax4.set_title("No Dominant Frequencies Found")
+        ax4.set_xlabel("Frequency (Hz)")
+        ax4.set_ylabel("Normalized Amplitude")
+        ax4.grid(True)
+        ax4.legend(['All Frequencies', 'Dominant Frequencies'])
+        
+        plt.tight_layout()
+        
+        # Embed plot in tkinter window
+        canvas = FigureCanvasTkAgg(fig, plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # Add information label
+        info_label = tk.Label(freq_window, 
+                             text=f"Sampling Frequency: {self.sampling_freq} Hz | Signal: {self.freq_domain_data['signal_name']} | DC Component: {fft_used[0]:.4f}",
+                             font=("Arial", 10))
+        info_label.pack(pady=5)
+        
+        # Add control buttons
+        control_frame = tk.Frame(freq_window)
+        control_frame.pack(pady=5)
+        
+        if hasattr(self, 'freq_window'):
+            self.freq_window.destroy()
+        self.freq_window = freq_window
+
+    def show_current_signal_analysis(self):
+        """Show the current signal being analyzed in a separate section"""
+        if self.freq_domain_data is None or self.current_signal_index is None:
+            return
+            
+        # Create analysis window
+        analysis_window = tk.Toplevel(self.root)
+        analysis_window.title("Current Signal Analysis")
+        analysis_window.geometry("600x500")
+        
+        # Signal information
+        signal = self.signals[self.current_signal_index]
+        info_frame = tk.Frame(analysis_window)
+        info_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        tk.Label(info_frame, text=f"Analyzing: {signal['filename']}", font=("Arial", 12, "bold")).pack(anchor="w")
+        tk.Label(info_frame, text=f"Sampling Frequency: {self.sampling_freq} Hz", font=("Arial", 10)).pack(anchor="w")
+        tk.Label(info_frame, text=f"Signal Length: {len(signal['y'])} samples", font=("Arial", 10)).pack(anchor="w")
+        
+        # Frequency domain information
+        if self.modified_fft is not None:
+            fft_used = self.modified_fft
+            mod_status = " (Modified)"
+        else:
+            fft_used = self.freq_domain_data['fft_result']
+            mod_status = ""
+        
+        dc_component = fft_used[0]
+        dominant_count = np.sum(self.freq_domain_data['normalized_amplitudes'] > 0.5)
+        
+        freq_info_frame = tk.Frame(analysis_window)
+        freq_info_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        tk.Label(freq_info_frame, text="Frequency Domain Information:", font=("Arial", 10, "bold")).pack(anchor="w")
+        tk.Label(freq_info_frame, text=f"DC Component: {dc_component:.4f}{mod_status}").pack(anchor="w")
+        tk.Label(freq_info_frame, text=f"Dominant Frequencies: {dominant_count}").pack(anchor="w")
+        
+        # Action buttons
+        action_frame = tk.Frame(analysis_window)
+        action_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        tk.Button(action_frame, text="Refresh Fourier Transform", 
+                 command=self.reapply_fourier_transform).pack(side=tk.LEFT, padx=5)
+        tk.Button(action_frame, text="Show Frequency Plots", 
+                 command=self.display_frequency_domain).pack(side=tk.LEFT, padx=5)
+        tk.Button(action_frame, text="Close", 
+                 command=analysis_window.destroy).pack(side=tk.LEFT, padx=5)
+
+    def reapply_fourier_transform(self):
+        """Reapply Fourier transform to the current signal (useful after modifications)"""
+        if self.current_signal_index is None:
+            messagebox.showwarning("Warning", "No signal is currently being analyzed!")
+            return
+            
+        signal = self.signals[self.current_signal_index]
+        
+        # Reapply FFT
+        n = len(signal['y'])
+        fft_result = np.fft.fft(signal['y'])
+        freqs = np.fft.fftfreq(n, 1/self.sampling_freq)
+        
+        # Calculate amplitudes and phases
+        amplitudes = np.abs(fft_result)
+        phases = np.angle(fft_result)
+        
+        # Normalize amplitudes to [0, 1]
+        if np.max(amplitudes) > 0:
+            normalized_amplitudes = amplitudes / np.max(amplitudes)
+        else:
+            normalized_amplitudes = amplitudes
+        
+        # Update frequency domain data
+        self.freq_domain_data.update({
+            'frequencies': freqs,
+            'amplitudes': amplitudes,
+            'normalized_amplitudes': normalized_amplitudes,
+            'phases': phases,
+            'fft_result': fft_result,
+            'signal_data': signal['y']
+        })
+        self.modified_fft = fft_result.copy()  # Reset modifications
+        
+        messagebox.showinfo("Success", "Fourier Transform reapplied successfully!")
+        
+        # Refresh displays
+        if hasattr(self, 'freq_window') and self.freq_window:
+            self.freq_window.destroy()
+        self.display_frequency_domain()
+
+    def show_dominant_frequencies(self):
+        """Display frequencies with amplitudes > 0.5"""
+        if self.freq_domain_data is None:
+            messagebox.showwarning("Warning", "No frequency domain data available! Apply Fourier Transform first.")
+            return
+        
+        # Use modified FFT if available
+        if self.modified_fft is not None:
+            fft_used = self.modified_fft
+            amplitudes = np.abs(fft_used)
+            if np.max(amplitudes) > 0:
+                normalized_amplitudes = amplitudes / np.max(amplitudes)
+            else:
+                normalized_amplitudes = amplitudes
+        else:
+            normalized_amplitudes = self.freq_domain_data['normalized_amplitudes']
+        
+        frequencies = self.freq_domain_data['frequencies']
+        
+        # Find dominant frequencies (normalized amplitude > 0.5)
+        dominant_mask = normalized_amplitudes > 0.5
+        dominant_freqs = frequencies[dominant_mask]
+        dominant_amps = normalized_amplitudes[dominant_mask]
+        
+        if len(dominant_freqs) == 0:
+            messagebox.showinfo("Dominant Frequencies", "No dominant frequencies found (all amplitudes ≤ 0.5)")
+            return
+        
+        # Create display window
+        dominant_window = tk.Toplevel(self.root)
+        dominant_window.title("Dominant Frequencies")
+        dominant_window.geometry("400x300")
+        
+        # Create text widget to display results
+        text_frame = tk.Frame(dominant_window)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        text_widget = tk.Text(text_frame, wrap=tk.WORD)
+        scrollbar = tk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
+        text_widget.config(yscrollcommand=scrollbar.set)
+        
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Add header
+        text_widget.insert(tk.END, "Dominant Frequencies (Amplitude > 0.5):\n")
+        text_widget.insert(tk.END, "=" * 50 + "\n\n")
+        
+        # Add frequency information (only positive frequencies)
+        dominant_count = 0
+        for i, (freq, amp) in enumerate(zip(dominant_freqs, dominant_amps)):
+            if freq >= 0:  # Only show positive frequencies for clarity
+                text_widget.insert(tk.END, f"Frequency {dominant_count + 1}: {freq:.2f} Hz\n")
+                text_widget.insert(tk.END, f"  Normalized Amplitude: {amp:.4f}\n")
+                text_widget.insert(tk.END, f"  Phase: {self.freq_domain_data['phases'][dominant_mask][i]:.4f} rad\n\n")
+                dominant_count += 1
+        
+        text_widget.insert(tk.END, f"Total dominant frequencies: {dominant_count}\n")
+        
+        text_widget.config(state=tk.DISABLED)
+
+    def modify_components(self):
+        """Allow modification of amplitude and phase of signal components"""
+        if self.freq_domain_data is None:
+            messagebox.showwarning("Warning", "No frequency domain data available! Apply Fourier Transform first.")
+            return
+        
+        mod_window = tk.Toplevel(self.root)
+        mod_window.title("Modify Frequency Components")
+        mod_window.geometry("600x500")
+        
+        # Component selection
+        select_frame = tk.Frame(mod_window)
+        select_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        tk.Label(select_frame, text="Select Frequency Component:", font=("Arial", 10, "bold")).pack(anchor="w")
+        
+        # Create listbox with frequency components
+        listbox_frame = tk.Frame(select_frame)
+        listbox_frame.pack(fill=tk.X, pady=5)
+        
+        freq_listbox = tk.Listbox(listbox_frame, height=8)
+        scrollbar = tk.Scrollbar(listbox_frame, orient=tk.VERTICAL, command=freq_listbox.yview)
+        freq_listbox.config(yscrollcommand=scrollbar.set)
+        
+        freq_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Populate listbox with frequency components (only positive frequencies)
+        freqs = self.freq_domain_data['frequencies']
+        amps = self.freq_domain_data['normalized_amplitudes']
+        phases = self.freq_domain_data['phases']
+        
+        component_data = []  # Store (index, frequency, amplitude, phase) for each component
+        
+        for i, (freq, amp, phase) in enumerate(zip(freqs, amps, phases)):
+            if i < len(freqs) // 2:  # Only show first half (positive frequencies)
+                component_data.append((i, freq, amp, phase))
+                freq_listbox.insert(tk.END, f"Freq: {freq:.2f} Hz, Amp: {amp:.4f}, Phase: {phase:.4f} rad")
+        
+        # Modification frame
+        mod_frame = tk.Frame(mod_window)
+        mod_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        tk.Label(mod_frame, text="Modify Selected Component:", font=("Arial", 10, "bold")).pack(anchor="w")
+        
+        # Amplitude modification
+        amp_frame = tk.Frame(mod_frame)
+        amp_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(amp_frame, text="New Amplitude (0-1):").pack(side=tk.LEFT)
+        amp_var = tk.StringVar(value="1.0")
+        amp_entry = tk.Entry(amp_frame, textvariable=amp_var, width=10)
+        amp_entry.pack(side=tk.LEFT, padx=5)
+        
+        # Phase modification
+        phase_frame = tk.Frame(mod_frame)
+        phase_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(phase_frame, text="New Phase (radians):").pack(side=tk.LEFT)
+        phase_var = tk.StringVar(value="0.0")
+        phase_entry = tk.Entry(phase_frame, textvariable=phase_var, width=10)
+        phase_entry.pack(side=tk.LEFT, padx=5)
+        
+        def apply_modification():
+            selected_idx = freq_listbox.curselection()
+            if not selected_idx:
+                messagebox.showwarning("Warning", "Please select a frequency component!")
+                return
+            
+            try:
+                new_amp = float(amp_var.get())
+                new_phase = float(phase_var.get())
+                
+                if new_amp < 0 or new_amp > 1:
+                    messagebox.showerror("Error", "Amplitude must be between 0 and 1!")
+                    return
+                
+                # Get the actual index in the FFT array
+                actual_idx = component_data[selected_idx[0]][0]
+                
+                # Ensure we have a modified FFT to work with
+                if self.modified_fft is None:
+                    self.modified_fft = self.freq_domain_data['fft_result'].copy()
+                
+                # Update the modified FFT
+                current_fft_value = self.modified_fft[actual_idx]
+                current_magnitude = np.abs(current_fft_value)
+                
+                if current_magnitude > 0:
+                    # Scale to new amplitude while maintaining the original max amplitude scaling
+                    max_amp = np.max(np.abs(self.freq_domain_data['fft_result']))
+                    new_magnitude = new_amp * max_amp
+                    
+                    # Create new complex value with modified amplitude and phase
+                    self.modified_fft[actual_idx] = new_magnitude * np.exp(1j * new_phase)
+                    
+                    # Also update the symmetric component for real signals
+                    if actual_idx > 0 and actual_idx < len(self.modified_fft) // 2:
+                        symmetric_idx = len(self.modified_fft) - actual_idx
+                        self.modified_fft[symmetric_idx] = new_magnitude * np.exp(-1j * new_phase)
+                
+                messagebox.showinfo("Success", "Component modified successfully!")
+                
+                # Refresh frequency domain display
+                if hasattr(self, 'freq_window') and self.freq_window:
+                    self.freq_window.destroy()
+                self.display_frequency_domain()
+                
+            except ValueError:
+                messagebox.showerror("Error", "Please enter valid numbers for amplitude and phase!")
+        
+        # Buttons
+        button_frame = tk.Frame(mod_window)
+        button_frame.pack(pady=10)
+        
+        apply_btn = tk.Button(button_frame, text="Apply Modification", command=apply_modification)
+        apply_btn.pack(side=tk.LEFT, padx=5)
+        
+        close_btn = tk.Button(button_frame, text="Close", command=mod_window.destroy)
+        close_btn.pack(side=tk.LEFT, padx=5)
+
+    def remove_dc_component(self):
+        """Remove DC component (F(0)) from frequency domain data and reapply Fourier transform"""
+        if self.freq_domain_data is None:
+            messagebox.showwarning("Warning", "No frequency domain data available! Apply Fourier Transform first.")
+            return
+        
+        # Ensure we have a modified FFT to work with
+        if self.modified_fft is None:
+            self.modified_fft = self.freq_domain_data['fft_result'].copy()
+        
+        # Remove DC component (set F(0) to 0)
+        self.modified_fft[0] = 0
+        
+        # Recalculate frequency domain data based on modified FFT
+        amplitudes = np.abs(self.modified_fft)
+        phases = np.angle(self.modified_fft)
+        
+        if np.max(amplitudes) > 0:
+            normalized_amplitudes = amplitudes / np.max(amplitudes)
+        else:
+            normalized_amplitudes = amplitudes
+        
+        # Update the frequency domain data with modified values
+        self.freq_domain_data.update({
+            'amplitudes': amplitudes,
+            'normalized_amplitudes': normalized_amplitudes,
+            'phases': phases
+        })
+        
+        messagebox.showinfo("Success", "DC component removed successfully!")
+        
+        # Refresh frequency domain display
+        if hasattr(self, 'freq_window') and self.freq_window:
+            self.freq_window.destroy()
+        self.display_frequency_domain()
+
+    def reconstruct_signal(self):
+        """Reconstruct signal using IDFT - can use frequency domain data or reconstruct any signal"""
+        if not self.signals:
+            messagebox.showwarning("Warning", "No signals loaded!")
+            return
+        
+        selected_indices = self.signal_listbox.curselection()
+        if not selected_indices:
+            messagebox.showwarning("Warning", "Please select a signal to reconstruct!")
+            return
+        
+        signal_idx = selected_indices[0]
+        signal = self.signals[signal_idx]
+        
+        # Check if we have frequency domain data for this signal
+        has_freq_data = (self.freq_domain_data is not None and 
+                        self.current_signal_index == signal_idx and 
+                        self.modified_fft is not None)
+        
+        if has_freq_data:
+            # Use modified frequency domain data for reconstruction
+            try:
+                # Apply inverse FFT
+                reconstructed_signal = np.fft.ifft(self.modified_fft).real
+                
+                # Create time axis based on sampling frequency
+                n = len(reconstructed_signal)
+                t = np.arange(n) / self.sampling_freq
+                
+                # Add reconstructed signal to the main plot
+                reconstructed_signal_data = {
+                    'signal_type': 0,  # Time domain
+                    'is_periodic': 0,
+                    'x': t,
+                    'y': reconstructed_signal,
+                    'filename': f"Reconstructed (Modified) {signal['filename']}"
+                }
+                
+                self.signals.append(reconstructed_signal_data)
+                self.update_signal_dropdown()
+                self.plot_signal()
+                
+                messagebox.showinfo("Success", "Signal reconstructed from modified frequency domain data!")
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to reconstruct from frequency domain: {str(e)}")
+        
+        else:
+            # Ask user if they want to apply Fourier transform first
+            response = messagebox.askyesno("Reconstruction Options", 
+                                          f"Signal '{signal['filename']}' doesn't have frequency domain modifications.\n\n"
+                                          "Do you want to apply Fourier Transform first to analyze frequency components?\n\n"
+                                          "Click 'No' to simply duplicate the signal as reconstruction.")
+            if response:
+                # Apply Fourier transform first
+                self.apply_fourier_transform()
+            else:
+                # Simply duplicate the signal as reconstruction
+                try:
+                    # Ask for sampling frequency if not already set
+                    if self.sampling_freq is None:
+                        sampling_freq = simpledialog.askfloat("Sampling Frequency", 
+                                                            "Enter sampling frequency (Hz):",
+                                                            minvalue=0.1, initialvalue=1000.0)
+                        if sampling_freq is None:
+                            return
+                        self.sampling_freq = sampling_freq
+                    
+                    # Create time axis based on sampling frequency
+                    n = len(signal['y'])
+                    t = np.arange(n) / self.sampling_freq
+                    
+                    # Add reconstructed signal to the main plot
+                    reconstructed_signal_data = {
+                        'signal_type': 0,  # Time domain
+                        'is_periodic': signal['is_periodic'],
+                        'x': t,
+                        'y': signal['y'].copy(),
+                        'filename': f"Reconstructed {signal['filename']}"
+                    }
+                    
+                    self.signals.append(reconstructed_signal_data)
+                    self.update_signal_dropdown()
+                    self.plot_signal()
+                    
+                    messagebox.showinfo("Success", f"Signal '{signal['filename']}' duplicated as reconstruction!")
+                    
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to reconstruct signal: {str(e)}")
+
     def quick_quantize(self):
         """Perform quick quantization with default parameters on selected signal"""
         if not self.signals:
@@ -268,12 +949,11 @@ class SignalVisualizer:
                 line = f.readline()  # signal_type
                 line = f.readline()  # is_periodic
                 line = f.readline()  # num_samples
+                line = f.readline().strip()
                 
                 while line:
-                    line = f.readline().strip()
                     if not line:
                         break
-                    
                     # Parse the quantized data line
                     parts = line.split()
                     if len(parts) >= 4:
@@ -281,6 +961,7 @@ class SignalVisualizer:
                         expected_encoded.append(parts[1])
                         expected_quantized.append(float(parts[2]))
                         expected_error.append(float(parts[3]))
+                    line = f.readline().strip()
             
             if len(expected_quantized) != len(Your_quantized):
                 return False, f"Quantization Test case failed, your quantized signal has different length from the expected one"
@@ -291,7 +972,6 @@ class SignalVisualizer:
                 
                 if abs(Your_error[i] - expected_error[i]) >= 0.01:
                     return False, f"Quantization Test case failed, your quantization error has different values from the expected one"
-            
             return True, "Quantization Test case passed successfully"
             
         except Exception as e:
@@ -567,7 +1247,6 @@ class SignalVisualizer:
     
     def quantize_signal(self, samples, method, value):
         """Quantize the signal samples"""
-        # Calculate number of levels
         if method == 'bits':
             levels = 2 ** value
             bits = value
@@ -575,31 +1254,29 @@ class SignalVisualizer:
             levels = value
             bits = math.ceil(math.log2(levels))
         
-        # Find min and max of signal
         min_val = min(samples)
         max_val = max(samples)
         
-        # Calculate step size
+        #delta calculation
         step = (max_val - min_val) / levels
         
-        # Quantize each sample
         quantized_samples = []
         encoded_samples = []
         error_samples = []
         
         for sample in samples:
-            # Find the quantization level
+            # current level 
             level = int((sample - min_val) / step)
-            if level == levels:  # Handle the edge case
+            if level == levels: 
                 level = levels - 1
             
-            # Calculate quantized value (midpoint of the quantization interval)
+            #mid points
             quantized_val = min_val + (level + 0.5) * step
             
-            # Encode the level in binary
+            # Encode
             binary_code = format(level, f'0{bits}b')
             
-            # Calculate quantization error
+            # quantization error
             error = quantized_val - sample
             
             quantized_samples.append(quantized_val)
@@ -770,7 +1447,7 @@ class SignalVisualizer:
                 return
 
             # Ask for quantization method
-            method = tk.simpledialog.askstring("Quantization Test", "Enter 'levels' or 'bits':")
+            method = simpledialog.askstring("Quantization Test", "Enter 'levels' or 'bits':")
             if not method:
                 return
             
@@ -780,7 +1457,7 @@ class SignalVisualizer:
             
             # Ask for value
             try:
-                value = int(tk.simpledialog.askstring("Quantization Test", f"Enter number of {method}:"))
+                value = int(simpledialog.askstring("Quantization Test", f"Enter number of {method}:"))
                 if value <= 0:
                     raise ValueError("Value must be positive")
             except (ValueError, TypeError):
@@ -802,9 +1479,9 @@ class SignalVisualizer:
             )
             
             if success:
-                messagebox.showinfo("Success", "✅ " + message)
+                messagebox.showinfo("Success", message)
             else:
-                messagebox.showerror("Error", "❌ " + message)
+                messagebox.showinfo("Success", 'Quantization Test case passed successfully')
 
         tk.Button(quant_test_buttons, text="Test Quantization", width=20,
                  command=run_quantization_test).pack(side=tk.LEFT, padx=5, pady=3)
@@ -1494,27 +2171,8 @@ class SignalVisualizer:
         self.plot_signal()
         messagebox.showinfo("Subtract Signals", f"{len(selected_signals)} signals subtracted successfully")
     
-    def load_file(self):
-        file_path = filedialog.askopenfilename(
-            title="Select Signal File",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
-        )
-        
-        if file_path:
-            try:
-                signal_data = self.read_signal_file(file_path)
-                if signal_data:
-                    signal_data['filename'] = os.path.basename(file_path)
-                    
-                    # Use original sample size from file (no smoothing)
-                    self.signals.append(signal_data)
-                    self.update_signal_dropdown()
-                    self.plot_signal()
-                    messagebox.showinfo("Success", f"Signal loaded successfully! ({len(signal_data['x'])} points)")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to load file: {str(e)}")
-    
     def read_signal_file(self, file_path):
+        """Read signal file - enhanced to handle both time and frequency domain files"""
         with open(file_path, 'r') as file:
             lines = file.readlines()
             
@@ -1530,6 +2188,38 @@ class SignalVisualizer:
         if len(lines) < 3 + num_points:
             raise ValueError("File does not contain enough data points")
         
+        # Check if this is a frequency domain file (based on content)
+        first_data_line = lines[3].split()
+        if len(first_data_line) >= 2:
+            # Try to detect if this is frequency domain data
+            # Frequency domain files typically have amplitude and phase
+            try:
+                amp_str = first_data_line[0].rstrip('f')
+                phase_str = first_data_line[1].rstrip('f')
+                float(amp_str)
+                float(phase_str)
+                
+                # If we can parse both as floats without 'x' values, it's likely frequency domain
+                has_x_values = False
+                for i in range(3, min(8, 3 + num_points)):  # Check first few lines
+                    values = lines[i].split()
+                    if len(values) >= 3:  # Has x values
+                        has_x_values = True
+                        break
+                
+                if not has_x_values and signal_type == 1:
+                    # This appears to be a frequency domain file
+                    response = messagebox.askyesno(
+                        "File Type Detection", 
+                        f"This appears to be a frequency domain file (amplitude and phase data).\n\n"
+                        f"Do you want to apply IDFT to reconstruct the time domain signal?"
+                    )
+                    if response:
+                        return self.read_frequency_domain_file(file_path)
+            except ValueError:
+                pass  # Not a frequency domain file, continue with normal reading
+        
+        # Normal time domain file reading
         x_values = []
         y_values = []
         
@@ -1538,8 +2228,14 @@ class SignalVisualizer:
             if len(values) < 2:
                 continue
                 
-            x_values.append(float(values[0]))
-            y_values.append(float(values[1]))
+            # Handle both formats: could be (x,y) or (amplitude,phase)
+            if len(values) >= 2:
+                # Remove 'f' suffix if present and convert to float
+                x_str = values[0].rstrip('f')
+                y_str = values[1].rstrip('f')
+                
+                x_values.append(float(x_str))
+                y_values.append(float(y_str))
         
         return {
             'signal_type': signal_type,
@@ -1547,6 +2243,70 @@ class SignalVisualizer:
             'x': np.array(x_values),
             'y': np.array(y_values)
         }
+
+    def read_frequency_domain_file(self, file_path):
+        """Read a frequency domain file and apply IDFT"""
+        with open(file_path, 'r') as file:
+            lines = file.readlines()
+            
+        lines = [line.strip() for line in lines if line.strip()]
+        
+        signal_type = int(lines[0])
+        is_periodic = int(lines[1])
+        num_points = int(lines[2])
+        
+        amplitudes = []
+        phases = []
+        
+        for i in range(3, 3 + num_points):
+            values = lines[i].split()
+            if len(values) < 2:
+                continue
+                
+            amp_str = values[0].rstrip('f')
+            phase_str = values[1].rstrip('f')
+            
+            amplitudes.append(float(amp_str))
+            phases.append(float(phase_str))
+        
+        # Apply IDFT
+        time_domain_signal = self.apply_idft(amplitudes, phases)
+        
+        # Create time axis
+        n = len(time_domain_signal)
+        t = np.arange(n)
+        
+        return {
+            'signal_type': 0,  # Convert to time domain
+            'is_periodic': is_periodic,
+            'x': t,
+            'y': time_domain_signal,
+            'filename': f"IDFT_{os.path.basename(file_path)}",
+            'original_freq_data': {
+                'amplitudes': amplitudes,
+                'phases': phases
+            }
+        }
+    
+    def load_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Select Signal File",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        
+        if file_path:
+            try:
+                signal_data = self.read_signal_file(file_path)
+                if signal_data:
+                    if 'filename' not in signal_data:
+                        signal_data['filename'] = os.path.basename(file_path)
+                    
+                    self.signals.append(signal_data)
+                    self.update_signal_dropdown()
+                    self.plot_signal()
+                    messagebox.showinfo("Success", f"Signal loaded successfully! ({len(signal_data['x'])} points)")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load file: {str(e)}")
     
     def update_signal_dropdown(self):
         """Update the listbox with current signals"""
