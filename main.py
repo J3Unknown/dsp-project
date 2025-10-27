@@ -7,8 +7,10 @@ import os
 import sys
 import math
 import cmath
+import time
 import Task1Test as task1
 import Task2Test as task2
+import signalcompare
 
 class SignalVisualizer:
     def __init__(self, root):
@@ -23,10 +25,11 @@ class SignalVisualizer:
         self.signals = []  # List of signal dictionaries
         
         # Frequency domain data
-        self.freq_domain_data = None  # Store FFT results
+        self.freq_domain_data = None  # Store FFT/DFT results
         self.sampling_freq = None
-        self.modified_fft = None
+        self.modified_freq_data = None  # Store modified frequency data (for both FFT and DFT)
         self.current_signal_index = None  # Track which signal is being analyzed
+        self.use_fft = False  # Default to DFT (changed from FFT)
         
         # Navigation state
         self.pan_start = None
@@ -118,10 +121,6 @@ class SignalVisualizer:
         quantize_btn = tk.Button(right_controls, text="Quantize Signal", command=self.open_quantize_dialog)
         quantize_btn.pack(side=tk.LEFT, padx=(0, 10))
         
-        # Quick Quantize button
-        quick_quantize_btn = tk.Button(right_controls, text="Quick Quantize", command=self.quick_quantize, bg="#4CAF50", fg="white")
-        quick_quantize_btn.pack(side=tk.LEFT, padx=(0, 10))
-        
         # Operation frame
         operation_frame = tk.Frame(main_frame)
         operation_frame.pack(fill=tk.X, pady=(0, 10))
@@ -171,6 +170,17 @@ class SignalVisualizer:
         run_tests_btn = tk.Button(main_frame, text="Open Test Window", bg="#337ab7", fg="white",
                           font=("Arial", 10, "bold"), command=self.open_test_window)
         run_tests_btn.pack(pady=(10, 5))
+        
+        # Transform method frame
+        transform_frame = tk.Frame(main_frame)
+        transform_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        transform_label = tk.Label(transform_frame, text="Transform Method:")
+        transform_label.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.transform_var = tk.StringVar(value="dft")
+        dft_radio = tk.Radiobutton(transform_frame, text="DFT", variable=self.transform_var, value="dft", command=self.toggle_transform_method)
+        dft_radio.pack(side=tk.LEFT)
         
         # Plot style frame
         style_frame = tk.Frame(main_frame)
@@ -239,6 +249,47 @@ class SignalVisualizer:
         freq_menu.add_command(label="Apply IDFT to Frequency File", command=self.apply_idft_to_frequency_file)
         freq_menu.add_command(label="Show Current Signal Analysis", command=self.show_current_signal_analysis)
 
+    def toggle_transform_method(self):
+        """Toggle between FFT and DFT methods"""
+        self.use_fft = (self.transform_var.get() == "fft")
+        # Clear any existing frequency domain data when switching methods
+        if self.freq_domain_data:
+            messagebox.showinfo("Transform Method Changed", 
+                              f"Switched to {'FFT' if self.use_fft else 'DFT'} method. "
+                              f"Please reapply Fourier Transform for new analysis.")
+            self.freq_domain_data = None
+            self.modified_freq_data = None
+
+    def apply_dft(self, signal):
+        """Apply Discrete Fourier Transform to signal"""
+        N = len(signal)
+        dft_result = np.zeros(N, dtype=complex)
+        
+        for k in range(N):  # Frequency index
+            sum_val = 0
+            for n in range(N):  # Time index
+                # DFT formula: X[k] = Σ x[n] * exp(-j * 2π * k * n / N)
+                exponent = -2j * cmath.pi * k * n / N
+                sum_val += signal[n] * cmath.exp(exponent)
+            dft_result[k] = sum_val
+        
+        return dft_result
+
+    def apply_idft(self, freq_domain):
+        """Apply Inverse Discrete Fourier Transform"""
+        N = len(freq_domain)
+        time_domain = np.zeros(N, dtype=complex)
+        
+        for n in range(N):
+            sum_val = 0
+            for k in range(N):
+                # IDFT formula: x[n] = (1/N) * Σ X[k] * exp(j * 2π * k * n / N)
+                exponent = 2j * cmath.pi * k * n / N
+                sum_val += freq_domain[k] * cmath.exp(exponent)
+            time_domain[n] = sum_val / N
+        
+        return np.real(time_domain)
+
     def apply_idft_to_frequency_file(self):
         """Apply Inverse DFT to a frequency domain file (amplitude and phase data)"""
         file_path = filedialog.askopenfilename(
@@ -279,8 +330,12 @@ class SignalVisualizer:
                     amplitudes.append(float(amp_str))
                     phases.append(float(phase_str))
                 
+                # Create complex frequency domain representation
+                freq_domain = np.array([amp * cmath.exp(1j * phase) 
+                                       for amp, phase in zip(amplitudes, phases)])
+                
                 # Apply IDFT
-                time_domain_signal = self.apply_idft(amplitudes, phases)
+                time_domain_signal = self.apply_idft(freq_domain)
                 
                 # Create time axis (assuming uniform sampling)
                 n = len(time_domain_signal)
@@ -306,31 +361,8 @@ class SignalVisualizer:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to apply IDFT: {str(e)}")
 
-    def apply_idft(self, amplitudes, phases):
-        """Apply Inverse Discrete Fourier Transform to amplitude and phase data"""
-        n = len(amplitudes)
-        
-        # Create complex frequency domain representation
-        # X[k] = amplitude[k] * exp(j * phase[k])
-        freq_domain = np.array([amp * cmath.exp(1j * phase) 
-                               for amp, phase in zip(amplitudes, phases)])
-        
-        # Apply Inverse DFT manually
-        time_domain = np.zeros(n, dtype=complex)
-        for i in range(n):  # Time index
-            sum_val = 0
-            for k in range(n):  # Frequency index
-                # IDFT formula: x[n] = (1/N) * Σ X[k] * exp(j * 2π * k * n / N)
-                exponent = 2j * cmath.pi * k * i / n
-                sum_val += freq_domain[k] * cmath.exp(exponent)
-            time_domain[i] = sum_val / n
-        
-        # The signal should be real, so take the real part
-        # (small imaginary parts are due to numerical precision)
-        return np.real(time_domain)
-
     def apply_fourier_transform(self):
-        """Apply Fourier transform to selected signal and display frequency domain"""
+        """Apply Fourier transform (DFT or FFT) to selected signal and display frequency domain"""
         if not self.signals:
             messagebox.showwarning("Warning", "No signals loaded!")
             return
@@ -355,19 +387,27 @@ class SignalVisualizer:
         # Apply DFT/FFT
         n = len(signal['y'])
         if n > 0:
-            # Use FFT for efficiency
-            fft_result = np.fft.fft(signal['y'])
+            start_time = time.time()
+            if not self.use_fft:  # Use DFT as default
+                transform_result = self.apply_dft(signal['y'])
+                end_time = time.time()
+                method_name = f"DFT (took {end_time - start_time:.3f} seconds)"
+            else:
+                # Use FFT for efficiency
+                transform_result = np.fft.fft(signal['y'])
+                method_name = "FFT"
+            
             freqs = np.fft.fftfreq(n, 1/sampling_freq)
             
             # Calculate amplitudes and phases
-            amplitudes = np.abs(fft_result)
-            phases = np.angle(fft_result)
+            amplitudes = np.abs(transform_result)
+            phases = np.angle(transform_result)
             
-            # Normalize amplitudes to [0, 1]
-            if np.max(amplitudes) > 0:
-                normalized_amplitudes = amplitudes / np.max(amplitudes)
-            else:
-                normalized_amplitudes = amplitudes
+            # Store the original max amplitude for consistent normalization
+            original_max_amp = np.max(amplitudes) if np.max(amplitudes) > 0 else 1.0
+            
+            # Normalize amplitudes to [0, 1] using the original max amplitude
+            normalized_amplitudes = amplitudes / original_max_amp
             
             # Store frequency domain data
             self.freq_domain_data = {
@@ -375,12 +415,14 @@ class SignalVisualizer:
                 'amplitudes': amplitudes,
                 'normalized_amplitudes': normalized_amplitudes,
                 'phases': phases,
-                'fft_result': fft_result,
+                'transform_result': transform_result,
                 'signal_name': signal['filename'],
                 'signal_data': signal['y'],
-                'time_domain': signal['x']
+                'time_domain': signal['x'],
+                'method': method_name,
+                'original_max_amp': original_max_amp  # Store original max for consistent normalization
             }
-            self.modified_fft = fft_result.copy()  # Store a copy for modifications
+            self.modified_freq_data = transform_result.copy()  # Store a copy for modifications
             
             # Display frequency domain plots
             self.display_frequency_domain()
@@ -408,21 +450,21 @@ class SignalVisualizer:
         # Create figure with subplots
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 8))
         
-        # Use modified FFT if available, otherwise use original
-        if self.modified_fft is not None:
-            fft_used = self.modified_fft
-            title_suffix = " (Modified)"
+        # Use modified frequency data if available, otherwise use original
+        if self.modified_freq_data is not None and not np.array_equal(self.modified_freq_data, self.freq_domain_data['transform_result']):
+            freq_used = self.modified_freq_data
+            title_suffix = " (DC Removed)"
+            
+            # Calculate from modified data but use original normalization
+            amplitudes = np.abs(freq_used)
+            phases = np.angle(freq_used)
+            normalized_amplitudes = amplitudes / self.freq_domain_data['original_max_amp']
         else:
-            fft_used = self.freq_domain_data['fft_result']
+            freq_used = self.freq_domain_data['transform_result']
             title_suffix = ""
-        
-        # Recalculate from the FFT being used
-        amplitudes = np.abs(fft_used)
-        phases = np.angle(fft_used)
-        if np.max(amplitudes) > 0:
-            normalized_amplitudes = amplitudes / np.max(amplitudes)
-        else:
-            normalized_amplitudes = amplitudes
+            amplitudes = self.freq_domain_data['amplitudes']
+            normalized_amplitudes = self.freq_domain_data['normalized_amplitudes']
+            phases = self.freq_domain_data['phases']
         
         freqs = self.freq_domain_data['frequencies']
         
@@ -483,7 +525,7 @@ class SignalVisualizer:
         
         # Add information label
         info_label = tk.Label(freq_window, 
-                             text=f"Sampling Frequency: {self.sampling_freq} Hz | Signal: {self.freq_domain_data['signal_name']} | DC Component: {fft_used[0]:.4f}",
+                             text=f"Method: {self.freq_domain_data['method']} | Sampling Frequency: {self.sampling_freq} Hz | Signal: {self.freq_domain_data['signal_name']} | DC Component: {freq_used[0]:.4f}",
                              font=("Arial", 10))
         info_label.pack(pady=5)
         
@@ -511,18 +553,19 @@ class SignalVisualizer:
         info_frame.pack(fill=tk.X, padx=10, pady=10)
         
         tk.Label(info_frame, text=f"Analyzing: {signal['filename']}", font=("Arial", 12, "bold")).pack(anchor="w")
+        tk.Label(info_frame, text=f"Transform Method: {'FFT' if self.use_fft else 'DFT'}", font=("Arial", 10)).pack(anchor="w")
         tk.Label(info_frame, text=f"Sampling Frequency: {self.sampling_freq} Hz", font=("Arial", 10)).pack(anchor="w")
         tk.Label(info_frame, text=f"Signal Length: {len(signal['y'])} samples", font=("Arial", 10)).pack(anchor="w")
         
         # Frequency domain information
-        if self.modified_fft is not None:
-            fft_used = self.modified_fft
-            mod_status = " (Modified)"
+        if self.modified_freq_data is not None and not np.array_equal(self.modified_freq_data, self.freq_domain_data['transform_result']):
+            freq_used = self.modified_freq_data
+            mod_status = " (Modified - DC Removed)"
         else:
-            fft_used = self.freq_domain_data['fft_result']
+            freq_used = self.freq_domain_data['transform_result']
             mod_status = ""
         
-        dc_component = fft_used[0]
+        dc_component = freq_used[0]
         dominant_count = np.sum(self.freq_domain_data['normalized_amplitudes'] > 0.5)
         
         freq_info_frame = tk.Frame(analysis_window)
@@ -531,6 +574,7 @@ class SignalVisualizer:
         tk.Label(freq_info_frame, text="Frequency Domain Information:", font=("Arial", 10, "bold")).pack(anchor="w")
         tk.Label(freq_info_frame, text=f"DC Component: {dc_component:.4f}{mod_status}").pack(anchor="w")
         tk.Label(freq_info_frame, text=f"Dominant Frequencies: {dominant_count}").pack(anchor="w")
+        tk.Label(freq_info_frame, text=f"Original Max Amplitude: {self.freq_domain_data['original_max_amp']:.4f}").pack(anchor="w")
         
         # Action buttons
         action_frame = tk.Frame(analysis_window)
@@ -551,20 +595,28 @@ class SignalVisualizer:
             
         signal = self.signals[self.current_signal_index]
         
-        # Reapply FFT
+        # Reapply DFT/FFT
         n = len(signal['y'])
-        fft_result = np.fft.fft(signal['y'])
+        start_time = time.time()
+        if not self.use_fft:  # Use DFT as default
+            transform_result = self.apply_dft(signal['y'])
+            end_time = time.time()
+            method_name = f"DFT (took {end_time - start_time:.3f} seconds)"
+        else:
+            transform_result = np.fft.fft(signal['y'])
+            method_name = "FFT"
+        
         freqs = np.fft.fftfreq(n, 1/self.sampling_freq)
         
         # Calculate amplitudes and phases
-        amplitudes = np.abs(fft_result)
-        phases = np.angle(fft_result)
+        amplitudes = np.abs(transform_result)
+        phases = np.angle(transform_result)
         
-        # Normalize amplitudes to [0, 1]
-        if np.max(amplitudes) > 0:
-            normalized_amplitudes = amplitudes / np.max(amplitudes)
-        else:
-            normalized_amplitudes = amplitudes
+        # Store the original max amplitude for consistent normalization
+        original_max_amp = np.max(amplitudes) if np.max(amplitudes) > 0 else 1.0
+        
+        # Normalize amplitudes to [0, 1] using the original max amplitude
+        normalized_amplitudes = amplitudes / original_max_amp
         
         # Update frequency domain data
         self.freq_domain_data.update({
@@ -572,10 +624,12 @@ class SignalVisualizer:
             'amplitudes': amplitudes,
             'normalized_amplitudes': normalized_amplitudes,
             'phases': phases,
-            'fft_result': fft_result,
-            'signal_data': signal['y']
+            'transform_result': transform_result,
+            'signal_data': signal['y'],
+            'method': method_name,
+            'original_max_amp': original_max_amp
         })
-        self.modified_fft = fft_result.copy()  # Reset modifications
+        self.modified_freq_data = transform_result.copy()  # Reset modifications
         
         messagebox.showinfo("Success", "Fourier Transform reapplied successfully!")
         
@@ -590,14 +644,11 @@ class SignalVisualizer:
             messagebox.showwarning("Warning", "No frequency domain data available! Apply Fourier Transform first.")
             return
         
-        # Use modified FFT if available
-        if self.modified_fft is not None:
-            fft_used = self.modified_fft
-            amplitudes = np.abs(fft_used)
-            if np.max(amplitudes) > 0:
-                normalized_amplitudes = amplitudes / np.max(amplitudes)
-            else:
-                normalized_amplitudes = amplitudes
+        # Use appropriate data for display
+        if self.modified_freq_data is not None and not np.array_equal(self.modified_freq_data, self.freq_domain_data['transform_result']):
+            # Use modified data but with original normalization
+            amplitudes = np.abs(self.modified_freq_data)
+            normalized_amplitudes = amplitudes / self.freq_domain_data['original_max_amp']
         else:
             normalized_amplitudes = self.freq_domain_data['normalized_amplitudes']
         
@@ -672,15 +723,15 @@ class SignalVisualizer:
         freq_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # Populate listbox with frequency components (only positive frequencies)
+        # list frequency components (only positive frequencies)
         freqs = self.freq_domain_data['frequencies']
         amps = self.freq_domain_data['normalized_amplitudes']
         phases = self.freq_domain_data['phases']
         
-        component_data = []  # Store (index, frequency, amplitude, phase) for each component
+        component_data = []
         
         for i, (freq, amp, phase) in enumerate(zip(freqs, amps, phases)):
-            if i < len(freqs) // 2:  # Only show first half (positive frequencies)
+            if i < len(freqs) // 2: 
                 component_data.append((i, freq, amp, phase))
                 freq_listbox.insert(tk.END, f"Freq: {freq:.2f} Hz, Amp: {amp:.4f}, Phase: {phase:.4f} rad")
         
@@ -718,34 +769,30 @@ class SignalVisualizer:
                 new_amp = float(amp_var.get())
                 new_phase = float(phase_var.get())
                 
-                if new_amp < 0 or new_amp > 1:
-                    messagebox.showerror("Error", "Amplitude must be between 0 and 1!")
+                if new_amp < 0:
+                    messagebox.showerror("Error", "Amplitude must be greater than 0")
                     return
                 
-                # Get the actual index in the FFT array
+                # Get the actual index in the transform array
                 actual_idx = component_data[selected_idx[0]][0]
                 
-                # Ensure we have a modified FFT to work with
-                if self.modified_fft is None:
-                    self.modified_fft = self.freq_domain_data['fft_result'].copy()
+                # Ensure we have modified frequency data to work with
+                if self.modified_freq_data is None:
+                    self.modified_freq_data = self.freq_domain_data['transform_result'].copy()
                 
-                # Update the modified FFT
-                current_fft_value = self.modified_fft[actual_idx]
-                current_magnitude = np.abs(current_fft_value)
+                # Update the modified frequency data
+                # Scale to new amplitude while maintaining the original max amplitude scaling
+                max_amp = self.freq_domain_data['original_max_amp']
+                new_magnitude = new_amp * max_amp
                 
-                if current_magnitude > 0:
-                    # Scale to new amplitude while maintaining the original max amplitude scaling
-                    max_amp = np.max(np.abs(self.freq_domain_data['fft_result']))
-                    new_magnitude = new_amp * max_amp
-                    
-                    # Create new complex value with modified amplitude and phase
-                    self.modified_fft[actual_idx] = new_magnitude * np.exp(1j * new_phase)
-                    
-                    # Also update the symmetric component for real signals
-                    if actual_idx > 0 and actual_idx < len(self.modified_fft) // 2:
-                        symmetric_idx = len(self.modified_fft) - actual_idx
-                        self.modified_fft[symmetric_idx] = new_magnitude * np.exp(-1j * new_phase)
+                # Create new complex value with modified amplitude and phase
+                self.modified_freq_data[actual_idx] = new_magnitude * np.exp(1j * new_phase)
                 
+                # Also update the symmetric component for real signals
+                if actual_idx > 0 and actual_idx < len(self.modified_freq_data) // 2:
+                    symmetric_idx = len(self.modified_freq_data) - actual_idx
+                    self.modified_freq_data[symmetric_idx] = new_magnitude * np.exp(-1j * new_phase)
+            
                 messagebox.showinfo("Success", "Component modified successfully!")
                 
                 # Refresh frequency domain display
@@ -767,33 +814,16 @@ class SignalVisualizer:
         close_btn.pack(side=tk.LEFT, padx=5)
 
     def remove_dc_component(self):
-        """Remove DC component (F(0)) from frequency domain data and reapply Fourier transform"""
+        """Remove DC component (F(0)) from frequency domain data without renormalizing"""
         if self.freq_domain_data is None:
             messagebox.showwarning("Warning", "No frequency domain data available! Apply Fourier Transform first.")
             return
         
-        # Ensure we have a modified FFT to work with
-        if self.modified_fft is None:
-            self.modified_fft = self.freq_domain_data['fft_result'].copy()
+        # Ensure we have modified frequency data to work with
+        if self.modified_freq_data is None:
+            self.modified_freq_data = self.freq_domain_data['transform_result'].copy()
         
-        # Remove DC component (set F(0) to 0)
-        self.modified_fft[0] = 0
-        
-        # Recalculate frequency domain data based on modified FFT
-        amplitudes = np.abs(self.modified_fft)
-        phases = np.angle(self.modified_fft)
-        
-        if np.max(amplitudes) > 0:
-            normalized_amplitudes = amplitudes / np.max(amplitudes)
-        else:
-            normalized_amplitudes = amplitudes
-        
-        # Update the frequency domain data with modified values
-        self.freq_domain_data.update({
-            'amplitudes': amplitudes,
-            'normalized_amplitudes': normalized_amplitudes,
-            'phases': phases
-        })
+        self.modified_freq_data[0] = 0
         
         messagebox.showinfo("Success", "DC component removed successfully!")
         
@@ -803,7 +833,7 @@ class SignalVisualizer:
         self.display_frequency_domain()
 
     def reconstruct_signal(self):
-        """Reconstruct signal using IDFT - can use frequency domain data or reconstruct any signal"""
+        """Reconstruct signal using inverse transform - can use frequency domain data or reconstruct any signal"""
         if not self.signals:
             messagebox.showwarning("Warning", "No signals loaded!")
             return
@@ -819,13 +849,16 @@ class SignalVisualizer:
         # Check if we have frequency domain data for this signal
         has_freq_data = (self.freq_domain_data is not None and 
                         self.current_signal_index == signal_idx and 
-                        self.modified_fft is not None)
+                        self.modified_freq_data is not None)
         
         if has_freq_data:
             # Use modified frequency domain data for reconstruction
             try:
-                # Apply inverse FFT
-                reconstructed_signal = np.fft.ifft(self.modified_fft).real
+                # Apply inverse transform
+                if not self.use_fft:  # Use IDFT as default
+                    reconstructed_signal = self.apply_idft(self.modified_freq_data)
+                else:
+                    reconstructed_signal = np.fft.ifft(self.modified_freq_data).real
                 
                 # Create time axis based on sampling frequency
                 n = len(reconstructed_signal)
@@ -1424,6 +1457,85 @@ class SignalVisualizer:
                 lambda f, i, s: task2.SignalSamplesAreEqual("Accumulation", f, i, s),
                 "Accumulation Test", requires_file=True
             )).pack(side=tk.LEFT, padx=5, pady=3)
+
+        # --- Frequency Domain Tests ---
+        freq_domain_frame = tk.Frame(buttons_frame)
+        freq_domain_frame.pack(fill=tk.X, pady=5)
+
+        tk.Label(freq_domain_frame, text="Frequency Domain Tests:", font=("Arial", 10, "bold")).pack(anchor="w")
+
+        freq_domain_buttons = tk.Frame(freq_domain_frame)
+        freq_domain_buttons.pack(fill=tk.X, padx=10, pady=5)
+
+        def run_amplitude_test():
+            """Run amplitude comparison test for frequency domain"""
+            if self.freq_domain_data is None or self.modified_freq_data is None:
+                messagebox.showwarning("Warning", "No frequency domain data available! Apply Fourier Transform first.")
+                return
+            
+            try:
+                # Get the amplitudes to compare
+                if self.modified_freq_data is not None and not np.array_equal(self.modified_freq_data, self.freq_domain_data['transform_result']):
+                    # Use modified data
+                    modified_amplitudes = np.abs(self.modified_freq_data)
+                    original_amplitudes = np.abs(self.freq_domain_data['transform_result'])
+                else:
+                    # Use original data
+                    modified_amplitudes = self.freq_domain_data['amplitudes']
+                    original_amplitudes = self.freq_domain_data['amplitudes']
+                
+                # Run the amplitude comparison test
+                result = signalcompare.SignalComapreAmplitude(
+                    SignalInput=original_amplitudes.tolist(), 
+                    SignalOutput=modified_amplitudes.tolist()
+                )
+                
+                if result:
+                    messagebox.showinfo("Amplitude Test", "✅ Amplitude Test Passed: Signals match within tolerance")
+                else:
+                    messagebox.showinfo("Amplitude Test", "❌ Amplitude Test Failed: Signals do not match")
+                    
+            except Exception as e:
+                messagebox.showerror("Error", f"Amplitude test failed: {str(e)}")
+
+        def run_phase_test():
+            """Run phase shift comparison test for frequency domain"""
+            if self.freq_domain_data is None or self.modified_freq_data is None:
+                messagebox.showwarning("Warning", "No frequency domain data available! Apply Fourier Transform first.")
+                return
+            
+            try:
+                # Get the phases to compare
+                if self.modified_freq_data is not None and not np.array_equal(self.modified_freq_data, self.freq_domain_data['transform_result']):
+                    # Use modified data
+                    modified_phases = np.angle(self.modified_freq_data)
+                    original_phases = self.freq_domain_data['phases']
+                else:
+                    # Use original data
+                    modified_phases = self.freq_domain_data['phases']
+                    original_phases = self.freq_domain_data['phases']
+                
+                # Run the phase comparison test
+                result = signalcompare.SignalComaprePhaseShift(
+                    SignalInput=original_phases.tolist(), 
+                    SignalOutput=modified_phases.tolist()
+                )
+                
+                if result:
+                    messagebox.showinfo("Phase Test", "✅ Phase Test Passed: Phase shifts match within tolerance")
+                else:
+                    messagebox.showinfo("Phase Test", "❌ Phase Test Failed: Phase shifts do not match")
+                    
+            except Exception as e:
+                messagebox.showerror("Error", f"Phase test failed: {str(e)}")
+
+        # Amplitude test button
+        tk.Button(freq_domain_buttons, text="Amplitude Test", width=20,
+                 command=run_amplitude_test).pack(side=tk.LEFT, padx=5, pady=3)
+
+        # Phase test button
+        tk.Button(freq_domain_buttons, text="Phase Shift Test", width=20,
+                 command=run_phase_test).pack(side=tk.LEFT, padx=5, pady=3)
 
         # --- Quantization Test ---
         quant_test_frame = tk.Frame(buttons_frame)
