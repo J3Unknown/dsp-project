@@ -249,6 +249,7 @@ class SignalVisualizer:
         freq_menu.add_command(label="Reconstruct Signal", command=self.reconstruct_signal)
         freq_menu.add_separator()
         freq_menu.add_command(label="Apply IDFT to Frequency File", command=self.apply_idft_to_frequency_file)
+        freq_menu.add_command(label="Apply IFFT to Frequency File", command=self.apply_ifft_to_frequency_file)
         freq_menu.add_command(label="Show Current Signal Analysis", command=self.show_current_signal_analysis)
 
     def toggle_transform_method(self):
@@ -310,6 +311,41 @@ class SignalVisualizer:
             result[k + N // 2] = even[k] - twiddle * odd[k]
         
         return result
+
+    def apply_ifft(self, freq_domain):
+        """
+        Apply Inverse Fast Fourier Transform (IFFT) using decimation-in-time algorithm
+        This is a recursive implementation of the Cooley-Tukey IFFT algorithm
+        """
+        N = len(freq_domain)
+        
+        # Base case: if length is 1, return the frequency domain value itself
+        if N == 1:
+            return freq_domain
+        
+        # Check if N is a power of 2, if not, pad with zeros to the next power of 2
+        if not self.is_power_of_two(N):
+            next_power = 2 ** math.ceil(math.log2(N))
+            padded_freq = np.pad(freq_domain, (0, next_power - N), 'constant')
+            result = self.apply_ifft(padded_freq)
+            return result[:N]  # Return only the first N points
+        
+        # Separate even and odd indices
+        even = self.apply_ifft(freq_domain[0::2])  # Even indices: X[0], X[2], X[4], ...
+        odd = self.apply_ifft(freq_domain[1::2])   # Odd indices: X[1], X[3], X[5], ...
+        
+        # Combine the results
+        result = np.zeros(N, dtype=complex)
+        for k in range(N // 2):
+            # Twiddle factor for IFFT: W_N^{-k} = e^(j * 2π * k / N)
+            twiddle = cmath.exp(2j * cmath.pi * k / N)
+            
+            # Butterfly operation for IFFT
+            result[k] = even[k] + twiddle * odd[k]
+            result[k + N // 2] = even[k] - twiddle * odd[k]
+        
+        # Scale by 1/N for IFFT
+        return result / N
 
     def is_power_of_two(self, n):
         """Check if a number is a power of 2"""
@@ -400,6 +436,83 @@ class SignalVisualizer:
                 
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to apply IDFT: {str(e)}")
+
+    def apply_ifft_to_frequency_file(self):
+        """Apply Inverse FFT to a frequency domain file (amplitude and phase data)"""
+        file_path = filedialog.askopenfilename(
+            title="Select Frequency Domain File",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        
+        if file_path:
+            try:
+                # Read the frequency domain file
+                with open(file_path, 'r') as file:
+                    lines = file.readlines()
+                
+                lines = [line.strip() for line in lines if line.strip()]
+                
+                if len(lines) < 3:
+                    raise ValueError("File does not contain enough data")
+                
+                signal_type = int(lines[0])
+                is_periodic = int(lines[1])
+                num_points = int(lines[2])
+                
+                if len(lines) < 3 + num_points:
+                    raise ValueError("File does not contain enough data points")
+                
+                amplitudes = []
+                phases = []
+                
+                for i in range(3, 3 + num_points):
+                    values = lines[i].split()
+                    if len(values) < 2:
+                        continue
+                        
+                    # Remove 'f' suffix if present and convert to float
+                    amp_str = values[0].rstrip('f')
+                    phase_str = values[1].rstrip('f')
+                    
+                    amplitudes.append(float(amp_str))
+                    phases.append(float(phase_str))
+                
+                # Create complex frequency domain representation
+                freq_domain = np.array([amp * cmath.exp(1j * phase) 
+                                       for amp, phase in zip(amplitudes, phases)])
+                
+                # Apply IFFT
+                start_time = time.time()
+                time_domain_signal = self.apply_ifft(freq_domain)
+                end_time = time.time()
+                
+                # Take real part (assuming real signal)
+                time_domain_signal = np.real(time_domain_signal)
+                
+                # Create time axis (assuming uniform sampling)
+                n = len(time_domain_signal)
+                t = np.arange(n)
+                
+                # Create signal dictionary
+                signal_data = {
+                    'signal_type': 0,  # Time domain
+                    'is_periodic': is_periodic,
+                    'x': t,
+                    'y': time_domain_signal,
+                    'filename': f"IFFT_{os.path.basename(file_path)}"
+                }
+                
+                self.signals.append(signal_data)
+                self.update_signal_dropdown()
+                self.plot_signal()
+                
+                messagebox.showinfo("Success", 
+                                  f"IFFT applied successfully!\n"
+                                  f"Generated {n} time domain samples from {num_points} frequency components\n"
+                                  f"Computation time: {end_time - start_time:.3f} seconds")
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to apply IFFT: {str(e)}")
 
     def apply_fourier_transform(self):
         """Apply Fourier transform (DFT or FFT) to selected signal and display frequency domain"""
@@ -900,7 +1013,8 @@ class SignalVisualizer:
                 if not self.use_fft:  # Use IDFT as default
                     reconstructed_signal = self.apply_idft(self.modified_freq_data)
                 else:
-                    reconstructed_signal = np.fft.ifft(self.modified_freq_data).real
+                    reconstructed_signal = self.apply_ifft(self.modified_freq_data)
+                    reconstructed_signal = np.real(reconstructed_signal)
                 
                 # Create time axis based on sampling frequency
                 n = len(reconstructed_signal)
