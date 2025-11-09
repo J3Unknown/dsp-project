@@ -181,7 +181,9 @@ class SignalVisualizer:
         self.transform_var = tk.StringVar(value="dft")
         dft_radio = tk.Radiobutton(transform_frame, text="DFT", variable=self.transform_var, value="dft", command=self.toggle_transform_method)
         dft_radio.pack(side=tk.LEFT)
-        
+        fft_radio = tk.Radiobutton(transform_frame, text="FFT", variable=self.transform_var, value="fft", command=self.toggle_transform_method)
+        fft_radio.pack(side=tk.LEFT)
+
         # Plot style frame
         style_frame = tk.Frame(main_frame)
         style_frame.pack(fill=tk.X, pady=(0, 10))
@@ -274,6 +276,44 @@ class SignalVisualizer:
             dft_result[k] = sum_val
         
         return dft_result
+
+    def apply_fft(self, signal):
+        """
+        Apply Fast Fourier Transform (FFT) using decimation-in-time algorithm
+        This is a recursive implementation of the Cooley-Tukey FFT algorithm
+        """
+        N = len(signal)
+        
+        # Base case: if length is 1, return the signal itself
+        if N == 1:
+            return signal
+        
+        # Check if N is a power of 2, if not, pad with zeros to the next power of 2
+        if not self.is_power_of_two(N):
+            next_power = 2 ** math.ceil(math.log2(N))
+            padded_signal = np.pad(signal, (0, next_power - N), 'constant')
+            result = self.apply_fft(padded_signal)
+            return result[:N]  # Return only the first N points
+        
+        # Separate even and odd indices
+        even = self.apply_fft(signal[0::2])  # Even indices: x[0], x[2], x[4], ...
+        odd = self.apply_fft(signal[1::2])   # Odd indices: x[1], x[3], x[5], ...
+        
+        # Combine the results
+        result = np.zeros(N, dtype=complex)
+        for k in range(N // 2):
+            # Twiddle factor: W_N^k = e^(-j * 2π * k / N)
+            twiddle = cmath.exp(-2j * cmath.pi * k / N)
+            
+            # Butterfly operation
+            result[k] = even[k] + twiddle * odd[k]
+            result[k + N // 2] = even[k] - twiddle * odd[k]
+        
+        return result
+
+    def is_power_of_two(self, n):
+        """Check if a number is a power of 2"""
+        return (n & (n - 1) == 0) and n != 0
 
     def apply_idft(self, freq_domain):
         """Apply Inverse Discrete Fourier Transform"""
@@ -393,9 +433,10 @@ class SignalVisualizer:
                 end_time = time.time()
                 method_name = f"DFT (took {end_time - start_time:.3f} seconds)"
             else:
-                # Use FFT for efficiency
-                transform_result = np.fft.fft(signal['y'])
-                method_name = "FFT"
+                # Use our custom FFT implementation
+                transform_result = self.apply_fft(signal['y'])
+                end_time = time.time()
+                method_name = f"FFT (took {end_time - start_time:.3f} seconds)"
             
             freqs = np.fft.fftfreq(n, 1/sampling_freq)
             
@@ -603,8 +644,9 @@ class SignalVisualizer:
             end_time = time.time()
             method_name = f"DFT (took {end_time - start_time:.3f} seconds)"
         else:
-            transform_result = np.fft.fft(signal['y'])
-            method_name = "FFT"
+            transform_result = self.apply_fft(signal['y'])
+            end_time = time.time()
+            method_name = f"FFT (took {end_time - start_time:.3f} seconds)"
         
         freqs = np.fft.fftfreq(n, 1/self.sampling_freq)
         
